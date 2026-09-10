@@ -1,0 +1,19 @@
+{
+  "name": "seedance-video-tasks",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "start:node-task": "node nodejs/task-server.js",
+    "test": "node --test nodejs/image-task-status-panel.test.js nodejs/video-preparation-scheduler.test.js nodejs/video-child-runner.test.js nodejs/video-temp-images.test.js nodejs/prepare-video-workflow.test.js nodejs/image-session.test.js nodejs/live-image-concurrency-test.test.js nodejs/task-server.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "open": "^10.1.0",
+    "puppeteer-core": "^21.11.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

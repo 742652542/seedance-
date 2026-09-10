@@ -1,0 +1,15 @@
+node_modules/
+api-keys.json
+dramart-auth.json
+.env
+__pycache__/
+*.py[cod]
+*.log
+*.err
+*.out
+seedance_tasks/
+nodejs/tmp-upload-images/
+nodejs/flow-inspect/
+nodejs/test-*.json
+backups/
+/m[[]0])

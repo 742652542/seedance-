@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seedance 视频生成任务</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --line: #d8dee9;
+      --primary: #2457ff;
+      --primary-dark: #183dcc;
+      --danger: #b42318;
+      --ok: #067647;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top left, #e9efff, transparent 34rem), var(--bg);
+      color: var(--text);
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto;
+    }
+    header {
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 44px);
+      letter-spacing: -0.04em;
+    }
+    p { color: var(--muted); line-height: 1.6; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.25fr 0.75fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(216, 222, 233, 0.9);
+      border-radius: 18px;
+      box-shadow: 0 18px 45px rgba(16, 24, 40, 0.08);
+      padding: 20px;
+    }
+    .card h2 {
+      margin: 0 0 16px;
+      font-size: 20px;
+    }
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      font-weight: 650;
+      font-size: 14px;
+    }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font: inherit;
+      background: #fff;
+      color: var(--text);
+    }
+    textarea { resize: vertical; min-height: 110px; }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .row.two { grid-template-columns: repeat(2, 1fr); }
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .inline input { width: auto; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font: inherit;
+      font-weight: 700;
+      color: #fff;
+      background: var(--primary);
+      cursor: pointer;
+    }
+    button:hover { background: var(--primary-dark); }
+    button.secondary {
+      color: var(--primary);
+      background: #eef2ff;
+    }
+    button.secondary:hover { background: #e0e7ff; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .hint {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .file-list {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    pre {
+      min-height: 260px;
+      max-height: 560px;
+      overflow: auto;
+      margin: 0;
+      padding: 14px;
+      background: #101828;
+      color: #e6edf7;
+      border-radius: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .status {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #f2f4f7;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .status.ok { background: #ecfdf3; color: var(--ok); }
+    .status.err { background: #fef3f2; color: var(--danger); }
+    video {
+      display: none;
+      width: 100%;
+      margin-top: 14px;
+      border-radius: 14px;
+      background: #000;
+    }
+
+    @media (max-width: 860px) {
+      main { width: min(100% - 20px, 1180px); margin: 18px auto; }
+      .grid, .row, .row.two { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Seedance 视频生成任务</h1>
+      <p>本地页面只接入火山方舟视频生成：创建任务、按 ID 查询、查询任务列表。API Key 保存在浏览器 localStorage，也可放到本地 <code>api-keys.json</code>。</p>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <h2>创建任务</h2>
+
+        <label for="model">模型</label>
+        <select id="model"></select>
+
+        <label for="apiKey">当前模型 API Key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="Bearer API Key，可稍后填写">
+        <div class="hint">切换模型时会读取该模型保存的 Key；点击“保存当前 Key”写入浏览器本地存储。</div>
+
+        <label for="prompt">提示词</label>
+        <textarea id="prompt" placeholder="例如：一只小猫在阳光下对着镜头打哈欠，电影感，柔和光线"></textarea>
+
+        <div class="row">
+          <div>
+            <label for="resolution">分辨率</label>
+            <select id="resolution">
+              <option>480p</option>
+              <option selected>720p</option>
+              <option>1080p</option>
+              <option>4k</option>
+            </select>
+          </div>
+          <div>
+            <label for="ratio">比例</label>
+            <select id="ratio">
+              <option selected>16:9</option>
+              <option>9:16</option>
+              <option>1:1</option>
+              <option>4:3</option>
+              <option>3:4</option>
+              <option>21:9</option>
+              <option>adaptive</option>
+            </select>
+          </div>
+          <div>
+            <label for="duration">时长（秒）</label>
+            <input id="duration" type="number" value="5" min="1" step="1">
+          </div>
+        </div>
+
+        <div class="row two">
+          <div>
+            <label for="seed">Seed</label>
+            <input id="seed" type="number" value="-1" step="1">
+          </div>
+          <div>
+            <label for="outputFormat">输出格式</label>
+            <select id="outputFormat">
+              <option selected>mp4</option>
+              <option>mov</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="inline">
+          <input id="watermark" type="checkbox" checked>
+          <label for="watermark" style="margin:0">添加 AI 水印</label>
+        </div>
+        <div class="inline">
+          <input id="cameraFixed" type="checkbox">
+          <label for="cameraFixed" style="margin:0">固定摄像头</label>
+        </div>
+        <div class="inline">
+          <input id="generateAudio" type="checkbox">
+          <label for="generateAudio" style="margin:0">生成音频</label>
+        </div>
+
+        <label for="imageFiles">参考图片（可选，多张）</label>
+        <input id="imageFiles" type="file" accept="image/*" multiple>
+        <div class="hint">支持多张图片。提交前会在浏览器本地压缩并转成 Base64，再传给接口的 <code>content[].image_url.url</code>。</div>
+        <div id="imageFileList" class="file-list">未选择图片</div>
+
+        <div class="row two">
+          <div>
+            <label for="imageMaxSize">图片最大边长</label>
+            <input id="imageMaxSize" type="number" value="1536" min="512" max="4096" step="128">
+          </div>
+          <div>
+            <label for="imageQuality">JPEG 质量</label>
+            <input id="imageQuality" type="number" value="0.86" min="0.4" max="1" step="0.01">
+          </div>
+        </div>
+
+        <label for="imageRole">图片角色</label>
+        <select id="imageRole">
+          <option value="reference_image" selected>reference_image</option>
+          <option value="first_frame">first_frame</option>
+          <option value="last_frame">last_frame</option>
+        </select>
+
+        <label for="advancedJson">高级 JSON 覆盖（可选）</label>
+        <textarea id="advancedJson" placeholder='例如：{"service_tier":"default","return_last_frame":true}'></textarea>
+        <div class="hint">这里的 JSON 会覆盖表单同名字段，适合补充文档里的高级参数。</div>
+
+        <div class="actions">
+          <button id="saveKey" class="secondary" type="button">保存当前 Key</button>
+          <button id="createTask" type="button">创建视频任务</button>
+        </div>
+
+        <div id="createStatus" class="status">等待操作</div>
+      </section>
+
+      <aside class="card">
+        <h2>查询</h2>
+
+        <label for="taskId">任务 ID</label>
+        <input id="taskId" placeholder="创建后会自动填入">
+
+        <div class="actions">
+          <button id="getTask" type="button">查询任务</button>
+          <button id="listTasks" class="secondary" type="button">查询列表</button>
+        </div>
+
+        <div class="row two">
+          <div>
+            <label for="pageNum">页码</label>
+            <input id="pageNum" type="number" value="1" min="1">
+          </div>
+          <div>
+            <label for="pageSize">每页数量</label>
+            <input id="pageSize" type="number" value="20" min="1" max="500">
+          </div>
+        </div>
+
+        <label for="filterStatus">状态过滤</label>
+        <select id="filterStatus">
+          <option value="">不限</option>
+          <option>queued</option>
+          <option>running</option>
+          <option>succeeded</option>
+          <option>failed</option>
+          <option>cancelled</option>
+          <option>expired</option>
+        </select>
+
+        <div id="queryStatus" class="status">查询结果会显示在下方</div>
+        <video id="video" controls></video>
+      </aside>
+    </div>
+
+    <section class="card" style="margin-top:18px">
+      <h2>接口响应</h2>
+      <pre id="output">{}</pre>
+    </section>
+  </main>
+
+  <script>
+    const models = [
+      'doubao-seedance-2-5-260628',
+      'doubao-seedance-2-0-260128',
+      'doubao-seedance-2-0-fast-260128',
+      'doubao-seedance-2-0-mini-260615'
+    ];
+
+    const $ = id => document.getElementById(id);
+    const modelSelect = $('model');
+    const output = $('output');
+    const video = $('video');
+
+    for (const model of models) {
+      const option = document.createElement('option');
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    }
+
+    function keyStorageName(model) {
+      return `seedance.apiKey.${model}`;
+    }
+
+    function loadKey() {
+      $('apiKey').value = localStorage.getItem(keyStorageName(modelSelect.value)) || '';
+    }
+
+    function saveKey() {
+      localStorage.setItem(keyStorageName(modelSelect.value), $('apiKey').value.trim());
+      setStatus($('createStatus'), '已保存当前模型 API Key', 'ok');
+    }
+
+    function setStatus(el, text, type) {
+      el.className = `status ${type || ''}`.trim();
+      el.textContent = text;
+    }
+
+    function show(data) {
+      output.textContent = JSON.stringify(data, null, 2);
+      const videoUrl = data?.content?.video_url || data?.items?.find(item => item?.content?.video_url)?.content?.video_url;
+      if (videoUrl) {
+        video.src = videoUrl;
+        video.style.display = 'block';
+      } else {
+        video.removeAttribute('src');
+        video.style.display = 'none';
+      }
+    }
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+      if (!response.ok) throw data;
+      return data;
+    }
+
+    function formatFileSize(size) {
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+      return `${(size / 1024 / 1024).toFixed(2)} MB`;
+    }
+
+    function updateImageFileList() {
+      const files = Array.from($('imageFiles').files || []);
+      $('imageFileList').innerHTML = files.length
+        ? files.map(file => `${file.name} (${formatFileSize(file.size)})`).join('<br>')
+        : '未选择图片';
+    }
+
+    function loadImage(file) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => {
+          URL.revokeObjectURL(image.src);
+          resolve(image);
+        };
+        image.onerror = () => reject(new Error(`读取图片失败：${file.name}`));
+        image.src = URL.createObjectURL(file);
+      });
+    }
+
+    async function compressImageToDataUrl(file) {
+      const image = await loadImage(file);
+      const maxSize = Number($('imageMaxSize').value) || 1536;
+      const quality = Math.min(1, Math.max(0.4, Number($('imageQuality').value) || 0.86));
+      const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0, width, height);
+      return canvas.toDataURL('image/jpeg', quality);
+    }
+
+    async function buildPayload() {
+      const content = [{ type: 'text', text: $('prompt').value.trim() }];
+      const imageFiles = Array.from($('imageFiles').files || []);
+
+      for (let index = 0; index < imageFiles.length; index += 1) {
+        const file = imageFiles[index];
+        setStatus($('createStatus'), `正在压缩图片 ${index + 1}/${imageFiles.length}：${file.name}`, '');
+        const imageBase64 = await compressImageToDataUrl(file);
+        content.push({
+          type: 'image_url',
+          role: $('imageRole').value,
+          image_url: { url: imageBase64 }
+        });
+      }
+
+      return {
+        model: modelSelect.value,
+        apiKey: $('apiKey').value.trim(),
+        content,
+        resolution: $('resolution').value,
+        ratio: $('ratio').value,
+        duration: Number($('duration').value),
+        seed: Number($('seed').value),
+        camera_fixed: $('cameraFixed').checked,
+        watermark: $('watermark').checked,
+        generate_audio: $('generateAudio').checked,
+        output_format: $('outputFormat').value,
+        advancedJson: $('advancedJson').value.trim()
+      };
+    }
+
+    async function createTask() {
+      setStatus($('createStatus'), '正在创建任务...', '');
+      try {
+        const payload = await buildPayload();
+        if (!payload.content[0].text) throw { error: '请填写提示词' };
+        const data = await requestJson('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (data.id) $('taskId').value = data.id;
+        show(data);
+        setStatus($('createStatus'), `创建成功${data.id ? `：${data.id}` : ''}`, 'ok');
+      } catch (error) {
+        show(error);
+        setStatus($('createStatus'), error.error || '创建失败', 'err');
+      }
+    }
+
+    async function getTask() {
+      setStatus($('queryStatus'), '正在查询任务...', '');
+      try {
+        const id = $('taskId').value.trim();
+        if (!id) throw { error: '请填写任务 ID' };
+        const params = new URLSearchParams({ model: modelSelect.value, apiKey: $('apiKey').value.trim() });
+        const data = await requestJson(`/api/tasks/${encodeURIComponent(id)}?${params}`);
+        show(data);
+        setStatus($('queryStatus'), `状态：${data.status || '未知'}`, data.status === 'failed' ? 'err' : 'ok');
+      } catch (error) {
+        show(error);
+        setStatus($('queryStatus'), error.error || '查询失败', 'err');
+      }
+    }
+
+    async function listTasks() {
+      setStatus($('queryStatus'), '正在查询列表...', '');
+      try {
+        const params = new URLSearchParams({
+          model: modelSelect.value,
+          apiKey: $('apiKey').value.trim(),
+          page_num: $('pageNum').value,
+          page_size: $('pageSize').value,
+          'filter.model': modelSelect.value
+        });
+        if ($('filterStatus').value) params.set('filter.status', $('filterStatus').value);
+        const data = await requestJson(`/api/tasks?${params}`);
+        show(data);
+        setStatus($('queryStatus'), `共 ${data.total ?? 0} 条`, 'ok');
+      } catch (error) {
+        show(error);
+        setStatus($('queryStatus'), error.error || '查询列表失败', 'err');
+      }
+    }
+
+    modelSelect.addEventListener('change', loadKey);
+    $('imageFiles').addEventListener('change', updateImageFileList);
+    $('saveKey').addEventListener('click', saveKey);
+    $('createTask').addEventListener('click', createTask);
+    $('getTask').addEventListener('click', getTask);
+    $('listTasks').addEventListener('click', listTasks);
+    loadKey();
+  </script>
+</body>
+</html>
