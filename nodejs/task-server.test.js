@@ -1615,6 +1615,43 @@ test('image task runner panel failures never alter progress, terminal, or sessio
   }
 });
 
+test('image task app default runner routes progress and terminal states to its injected panel', async () => {
+  for (const generationResult of [
+    { status: 'succeeded', response: { images: [{ image_url: 'https://result/image.png' }] } },
+    { status: 'failed', failedReason: 'generation rejected' },
+  ]) {
+    const calls = [];
+    const panel = {
+      add: (...args) => calls.push(['add', ...args]),
+      update: (...args) => calls.push(['update', ...args]),
+      succeed: (...args) => calls.push(['succeed', ...args]),
+      fail: (...args) => calls.push(['fail', ...args]),
+    };
+    const imageTaskRunner = createImageTaskRunner({
+      imageSession: { runTask: async (_id, _request, options) => {
+        options.onProgress({ stage: 'generating', detail: '1/1' });
+        return generationResult;
+      } },
+      readJson,
+      writeJson,
+      rm: fs.rm.bind(fs),
+      log: () => {},
+    });
+
+    await withServer(undefined, async (baseUrl) => {
+      const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+      const terminal = generationResult.status === 'succeeded' ? 'succeed' : 'fail';
+      assert.equal(response.result.status, generationResult.status === 'succeeded' ? 'success' : 'error');
+      assert.ok(calls.some((call) => call[0] === 'update' && call[1] === response.result.task_id));
+      assert.ok(calls.some((call) => call[0] === terminal && call[1] === response.result.task_id));
+    }, {
+      authenticate: async () => {},
+      imageTaskRunner,
+      imageTaskStatusPanel: panel,
+    });
+  }
+});
+
 test('image session readiness ignores synchronous and asynchronous attach panel failures', async () => {
   for (const attachPage of [
     () => { throw new Error('attach failed'); },

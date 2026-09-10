@@ -743,6 +743,7 @@ export function createImageTaskRunner(options) {
   const statusPanel = options.statusPanel || {};
   const panelLog = options.log || debugLog;
   return async function runImageTask(id, requestPath, _body, action, context) {
+    const taskStatusPanel = context.statusPanel || statusPanel;
     const request = await options.readJson(requestPath);
     let taskContext = null;
     let generationResult;
@@ -768,10 +769,10 @@ export function createImageTaskRunner(options) {
           });
           options.log(`[task.started] task_id=${id} context=${JSON.stringify(taskContext)}`);
         },
-        onProgress: ({ stage, detail }) => safePanelCall(statusPanel, 'update', [id, stage, detail], panelLog),
+        onProgress: ({ stage, detail }) => safePanelCall(taskStatusPanel, 'update', [id, stage, detail], panelLog),
       });
     } catch (error) {
-      safePanelCall(statusPanel, 'fail', [id, safePanelError(error)], panelLog);
+      safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(error)], panelLog);
       throw error;
     }
     const ok = generationResult.status === 'succeeded';
@@ -779,8 +780,8 @@ export function createImageTaskRunner(options) {
     const resultData = buildResultData(ok ? 'success' : 'error', id, resultItem, resultItem, ok ? '' : extractError(generationResult, '图片生成失败'), '', taskContext, action);
     await options.writeJson(context.resultPath, resultData);
     await options.rm(context.runningPath, { force: true });
-    if (ok) safePanelCall(statusPanel, 'succeed', [id], panelLog);
-    else safePanelCall(statusPanel, 'fail', [id, safePanelError(resultData.error)], panelLog);
+    if (ok) safePanelCall(taskStatusPanel, 'succeed', [id], panelLog);
+    else safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(resultData.error)], panelLog);
     options.log(`[task.done] task_id=${id} status=${resultData.status} media_url=${resultData.image_url || ''} error=${resultData.error || ''}`);
   };
 }
@@ -820,7 +821,8 @@ export async function runDramartTask(id, requestPath, body, action = 'generate_v
   const runningPath = taskOptions.runningPath || taskFile(RUNNING_DIR, id);
   const resultPath = taskOptions.resultPath || taskFile(RESULTS_DIR, id);
   if (action === 'generate_image') {
-    return runImageTask(id, requestPath, body, action, { runningPath, resultPath, ...taskOptions });
+    const imageTaskRunner = taskOptions.imageTaskRunner || runImageTask;
+    return imageTaskRunner(id, requestPath, body, action, { runningPath, resultPath, ...taskOptions });
   }
 
   const plan = taskExecutionPlan(action);
@@ -1196,6 +1198,8 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
     readJson: appReadJson,
     writeJson: appWriteJson,
     buildResultData,
+    statusPanel: appImageTaskStatusPanel,
+    imageTaskRunner: options.imageTaskRunner,
       });
     }));
 
