@@ -149,7 +149,7 @@ async function updateTaskStatus(page, step, detail = '', state = 'running') {
 }
 
 async function setViewportToWindow(page) {
-  await page.setViewport({ width: 1920, height: 1080 });
+  await page.setViewport({ width: 1920, height: 920 });
 }
 
 function findDebugPort(data) {
@@ -176,7 +176,7 @@ function findBrowserURL(data) {
 }
 
 function browserConnectOptions(endpoint) {
-  const viewport = { width: 1920, height: 1080 };
+  const viewport = { width: 1920, height: 920 };
   return String(endpoint).startsWith('ws:') || String(endpoint).startsWith('wss:')
     ? { browserWSEndpoint: endpoint, defaultViewport: viewport }
     : { browserURL: endpoint, defaultViewport: viewport };

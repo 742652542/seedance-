@@ -1438,7 +1438,7 @@ test('image task context is written from the exact session used by runTask', asy
   assert.equal(writes.find((write) => write.file === 'running').data.dramart.project.projectId, 'actual-project');
 });
 
-test('image task runner forwards progress and records successful terminal state after persistence cleanup', async () => {
+test('image task runner forwards progress and records successful terminal state before cleanup', async () => {
   const calls = [];
   const runner = createImageTaskRunner({
     imageSession: {
@@ -1463,12 +1463,12 @@ test('image task runner forwards progress and records successful terminal state 
   assert.deepEqual(calls, [
     ['update', 'image-task', '图片生成中', '1/2'],
     ['write'],
-    ['rm'],
     ['succeed', 'image-task'],
+    ['rm'],
   ]);
 });
 
-test('image task runner records normalized failure after persistence cleanup', async () => {
+test('image task runner records normalized failure before cleanup', async () => {
   const calls = [];
   const runner = createImageTaskRunner({
     imageSession: { runTask: async () => ({ status: 'failed', failedReason: 'generation rejected' }) },
@@ -1480,7 +1480,7 @@ test('image task runner records normalized failure after persistence cleanup', a
   });
 
   await runner('image-task', 'request', {}, 'generate_image', { runningPath: 'running', resultPath: 'result' });
-  assert.deepEqual(calls, [['write'], ['rm'], ['fail', 'image-task', 'generation rejected']]);
+  assert.deepEqual(calls, [['write'], ['fail', 'image-task', 'generation rejected'], ['rm']]);
 });
 
 test('image task runner marks session exceptions failed before rethrowing', async () => {
@@ -1549,6 +1549,22 @@ test('image task safe panel error redacts complete cookie header values while pr
   assert.ok(safe.length <= 160);
 });
 
+test('image task safe panel error redacts cookie fields without removing ordinary diagnostics', () => {
+  const safe = safePanelError('response content: invalid JSON\ncookie=session-secret; theme=THEME-SECRET');
+
+  assert.match(safe, /response content: invalid JSON/);
+  assert.doesNotMatch(safe, /session-secret|THEME-SECRET/);
+});
+
+test('image task safe panel error strips credentials, query, and fragment from embedded URLs', () => {
+  const safe = safePanelError('reference download failed at https://user:pass@private.example/path/image.png?sig=short-secret&X-Amz-Signature=cloud-secret#frag, retry stopped');
+
+  assert.match(safe, /reference download failed/);
+  assert.match(safe, /private\.example/);
+  assert.doesNotMatch(safe, /user|pass|sig|short-secret|X-Amz|cloud-secret|frag/);
+  assert.ok(safe.length <= 160);
+});
+
 test('image task safe panel calls contain synchronous throws and rejected thenables with safe logs', async () => {
   const logs = [];
   const unhandled = [];
@@ -1571,6 +1587,25 @@ test('image task safe panel calls contain synchronous throws and rejected thenab
     assert.deepEqual(unhandled, []);
     assert.equal(logs.length, 2);
     assert.doesNotMatch(logs.join(' '), /sync-secret|YXN5bmMtc2VjcmV0/);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('image task safe panel calls contain rejected async loggers', async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    safePanelCall(
+      { update: () => Promise.reject(new Error('panel failed token=panel-secret')) },
+      'update',
+      ['task'],
+      () => Promise.reject(new Error('logger failed token=logger-secret')),
+    );
+    await new Promise(setImmediate);
+    await new Promise(setImmediate);
+    assert.deepEqual(unhandled, []);
   } finally {
     process.off('unhandledRejection', onUnhandled);
   }
@@ -1621,6 +1656,7 @@ test('image task app default runner routes progress and terminal states to its i
     { status: 'failed', failedReason: 'generation rejected' },
   ]) {
     const calls = [];
+    const leases = { acquired: 0, released: 0 };
     const panel = {
       add: (...args) => calls.push(['add', ...args]),
       update: (...args) => calls.push(['update', ...args]),
@@ -1646,10 +1682,99 @@ test('image task app default runner routes progress and terminal states to its i
       assert.ok(calls.some((call) => call[0] === terminal && call[1] === response.result.task_id));
     }, {
       authenticate: async () => {},
+      acquireBrowserLease: async () => {
+        leases.acquired += 1;
+        return { release: async () => { leases.released += 1; } };
+      },
       imageTaskRunner,
       imageTaskStatusPanel: panel,
     });
+    assert.deepEqual(leases, { acquired: 1, released: 1 });
   }
+});
+
+test('image task app creates a session whose ready pages attach to its injected panel', async () => {
+  const pages = [];
+  let sessionOptions;
+  const panel = { attachPage: (page) => pages.push(page) };
+
+  const app = createTaskApp({
+    imageTaskStatusPanel: panel,
+    imageSessionOptions: {
+      createSession: (options) => { sessionOptions = options; return { runTask: async () => ({ status: 'failed' }) }; },
+      sessionOptions: { log: () => {} },
+    },
+  });
+
+  assert.equal(app.locals.imageTaskStatusPanel, panel);
+  assert.equal(typeof sessionOptions?.onSessionReady, 'function');
+  sessionOptions.onSessionReady('injected-page');
+  assert.deepEqual(pages, ['injected-page']);
+});
+
+test('image task session exceptions are reported exactly once across runner and observer', async () => {
+  const failures = [];
+  const leases = { acquired: 0, released: 0 };
+  const sessionError = new Error('session failed');
+  const panel = { add: () => {}, fail: (...args) => failures.push(args) };
+  const imageTaskRunner = createImageTaskRunner({
+    imageSession: { runTask: async () => { throw sessionError; } },
+    readJson,
+    writeJson,
+    rm: fs.rm.bind(fs),
+    log: () => {},
+  });
+
+  await withServer(undefined, async (baseUrl) => {
+    const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+    assert.equal(response.result.status, 'error');
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0][0], response.result.task_id);
+  }, {
+    authenticate: async () => {},
+    acquireBrowserLease: async () => {
+      leases.acquired += 1;
+      return { release: async () => { leases.released += 1; } };
+    },
+    imageTaskRunner,
+    imageTaskStatusPanel: panel,
+  });
+  assert.deepEqual(leases, { acquired: 1, released: 1 });
+});
+
+test('image task failure deduplication is isolated when apps reuse the same Error instance', async () => {
+  const sharedError = new Error('shared session failure');
+  const firstFailures = [];
+  const secondFailures = [];
+  const firstRunner = createImageTaskRunner({
+    imageSession: { runTask: async () => { throw sharedError; } },
+    readJson,
+    writeJson,
+    rm: fs.rm.bind(fs),
+    log: () => {},
+  });
+  const lease = async () => ({ release: async () => {} });
+
+  await withServer(undefined, async (baseUrl) => {
+    const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+    assert.equal(response.result.status, 'error');
+  }, {
+    authenticate: async () => {},
+    acquireBrowserLease: lease,
+    imageTaskRunner: firstRunner,
+    imageTaskStatusPanel: { add: () => {}, fail: (...args) => firstFailures.push(args) },
+  });
+
+  await withServer(async () => { throw sharedError; }, async (baseUrl) => {
+    const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+    assert.equal(response.result.status, 'error');
+  }, {
+    acquireBrowserLease: lease,
+    imageTaskStatusPanel: { add: () => {}, fail: (...args) => secondFailures.push(args) },
+  });
+
+  assert.equal(firstFailures.length, 1);
+  assert.equal(secondFailures.length, 1);
 });
 
 test('image session readiness ignores synchronous and asynchronous attach panel failures', async () => {
@@ -1693,7 +1818,7 @@ test('image task add and observe fail panel exceptions do not interrupt dispatch
   }
 });
 
-test('image task cleanup failure marks the panel failed without overwriting its persisted success', async () => {
+test('image task cleanup failure keeps the persisted success and reports panel success exactly once', async () => {
   const failures = [];
   const successes = [];
   const panel = {
@@ -1716,8 +1841,8 @@ test('image task cleanup failure marks the panel failed without overwriting its 
     const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
     assert.equal(response.result.status, 'success');
     assert.deepEqual(response.result.data, ['https://result/image.png']);
-    assert.equal(failures.length, 1);
-    assert.deepEqual(successes, []);
+    assert.deepEqual(failures, []);
+    assert.deepEqual(successes, [[response.result.task_id]]);
   }, { imageTaskStatusPanel: panel });
 });
 
@@ -1788,6 +1913,98 @@ test('custom successful image runTask does not mark status panel successful', as
     await new Promise(setImmediate);
     assert.deepEqual(successes, []);
   }, { imageTaskStatusPanel: { add: () => {}, succeed: (...args) => successes.push(args) } });
+});
+
+test('browser leases cover image tasks and are released after failure', async () => {
+  const calls = [];
+  await withServer(async () => { calls.push('run'); throw new Error('task failed'); }, async (baseUrl) => {
+    const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+    assert.equal(response.result.status, 'error');
+    assert.deepEqual(calls, ['acquire', 'run', 'release']);
+  }, {
+    acquireBrowserLease: async () => {
+      calls.push('acquire');
+      return { release: () => calls.push('release') };
+    },
+  });
+});
+
+test('image browser lease release failures are reported without changing task outcomes', async () => {
+  for (const releaseFailure of [
+    () => { throw new Error('sync image release failed'); },
+    async () => { await new Promise(setImmediate); throw new Error('async image release failed'); },
+  ]) {
+    for (const outcome of ['success', 'failure']) {
+      const events = [];
+      const businessError = new Error('original image task failure');
+      const imageTaskRunner = createImageTaskRunner({
+        imageSession: { runTask: async () => {
+          if (outcome === 'failure') throw businessError;
+          return { status: 'succeeded', response: { images: [{ image_url: 'https://result/image.png' }] } };
+        } },
+        readJson,
+        writeJson,
+        rm: fs.rm.bind(fs),
+        log: () => {},
+      });
+
+      await withServer(undefined, async (baseUrl) => {
+        const response = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
+        events.push('response');
+        assert.equal(response.result.status, outcome === 'success' ? 'success' : 'error');
+        if (outcome === 'failure') assert.match(response.result.error, /original image task failure/);
+      }, {
+        authenticate: async () => {},
+        acquireBrowserLease: async () => ({ release: async () => {
+          events.push('release-start');
+          await releaseFailure();
+        } }),
+        imageTaskRunner,
+        imageTaskStatusPanel: { add: () => {}, succeed: () => {}, fail: () => {} },
+        onBackgroundError: (error) => events.push(`reported:${error.message}`),
+      });
+
+      assert.equal(events.filter((event) => event.startsWith('reported:')).length, 1);
+      assert.ok(events.findIndex((event) => event.startsWith('reported:')) < events.indexOf('response'));
+    }
+  }
+});
+
+test('browser leases cover video tasks and are released after completion', async () => {
+  const calls = [];
+  await withServer(async (_id, _requestPath, _body, _action, options) => {
+    calls.push('run');
+    await options.onPrepared({ taskEpisode: { EpisodeId: 'episode', ShotId: 'shot' } });
+  }, async (baseUrl) => {
+    const response = await postAsk(baseUrl, videoBody({ wait_for_completion: true }));
+    assert.equal(response.status, 'completed');
+    assert.deepEqual(calls, ['acquire', 'run', 'release']);
+  }, {
+    acquireBrowserLease: async () => {
+      calls.push('acquire');
+      return { release: () => calls.push('release') };
+    },
+  });
+});
+
+test('video browser lease release rejection is reported before successful completion', async () => {
+  const events = [];
+  await withServer(async (_id, _requestPath, _body, _action, options) => {
+    await options.onPrepared({ taskEpisode: { EpisodeId: 'episode', ShotId: 'shot' } });
+  }, async (baseUrl) => {
+    const response = await postAsk(baseUrl, videoBody({ wait_for_completion: true }));
+    events.push('response');
+    assert.equal(response.status, 'completed');
+  }, {
+    acquireBrowserLease: async () => ({ release: async () => {
+      events.push('release-start');
+      await new Promise(setImmediate);
+      throw new Error('video release failed');
+    } }),
+    onBackgroundError: (error) => events.push(`reported:${error.message}`),
+  });
+
+  assert.deepEqual(events, ['release-start', 'reported:video release failed', 'response']);
 });
 
 test('standby browser initialization is shared and retries after cleaning a partial failure', async () => {

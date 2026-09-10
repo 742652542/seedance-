@@ -2,6 +2,7 @@ node_modules/
 api-keys.json
 dramart-auth.json
 .env
+.chrome-user-data/
 __pycache__/
 *.py[cod]
 *.log

@@ -17,6 +17,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
         state: ['running', 'success', 'error'].includes(task?.state) ? task.state : 'running',
       };
       if (Number.isFinite(task?.finishedAt)) safeTask.finishedAt = Number(task.finishedAt);
+      if (Number.isFinite(task?.finishedOrder)) safeTask.finishedOrder = Number(task.finishedOrder);
       return safeTask;
     }) : [],
     timestamp: Number(snapshot?.timestamp) || Date.now(),
@@ -44,7 +45,9 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
     const updateElapsed = () => {
       document.querySelectorAll(`#${panelId} [data-started-at]`).forEach((element) => {
         const startedAt = Number(element.dataset.startedAt);
-        element.textContent = formatElapsed(Date.now() - startedAt);
+        const finishedAt = Number(element.dataset.finishedAt);
+        const end = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+        element.textContent = formatElapsed(end - startedAt);
       });
     };
     const rotateLongList = () => {
@@ -96,7 +99,13 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
       .sort((left, right) => {
         const leftTerminal = left.task.state === 'running' ? 0 : 1;
         const rightTerminal = right.task.state === 'running' ? 0 : 1;
-        return leftTerminal - rightTerminal || left.index - right.index;
+        if (leftTerminal !== rightTerminal) return leftTerminal - rightTerminal;
+        if (leftTerminal) {
+          return left.task.finishedAt - right.task.finishedAt
+            || left.task.finishedOrder - right.task.finishedOrder
+            || left.index - right.index;
+        }
+        return left.index - right.index;
       })
       .map(({ task }) => task);
     if (visualTasks.length === 0) {
@@ -116,6 +125,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
         const elapsedRow = makeElement('div', 'display:flex;justify-content:flex-end;color:#64748b;font-size:12px;margin-top:5px');
         const elapsed = makeElement('span', '', '00:00');
         elapsed.dataset.startedAt = String(task.startedAt);
+        if (Number.isFinite(task.finishedAt)) elapsed.dataset.finishedAt = String(task.finishedAt);
         elapsedRow.appendChild(elapsed);
         row.appendChild(elapsedRow);
         content.appendChild(row);
@@ -125,6 +135,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
     panel.replaceChildren(header, content);
     const previousPagination = window[paginationKey] || {
       taskIds: [],
+      terminalIds: [],
       scrollTop: 0,
       ticks: 0,
       hasTerminal: false,
@@ -135,12 +146,14 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
     const tasksAdded = taskIds.length > previousPagination.taskIds.length
       && previousPagination.taskIds.every((id) => taskIds.includes(id));
     const terminalCount = visualTasks.filter((task) => task.state !== 'running').length;
+    const terminalIds = visualTasks.filter((task) => task.state !== 'running').map((task) => task.id);
+    const hasNewTerminal = terminalIds.some((id) => !previousPagination.terminalIds?.includes(id));
     const lastPageTop = Math.max(0, content.scrollHeight - content.clientHeight);
     const runningRatio = visualTasks.length === 0 ? 0 : (visualTasks.length - terminalCount) / visualTasks.length;
     const terminalStartTop = Math.min(lastPageTop, Math.round(content.scrollHeight * runningRatio));
     let nextScrollTop = Math.min(previousPagination.scrollTop, lastPageTop);
     if (terminalCount > 0) {
-      nextScrollTop = !previousPagination.hasTerminal || !sameStructure
+      nextScrollTop = !previousPagination.hasTerminal || !sameStructure || hasNewTerminal
         ? lastPageTop
         : Math.max(terminalStartTop, nextScrollTop);
     } else if (tasksAdded) {
@@ -150,6 +163,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
     content.scrollTop = nextScrollTop;
     window[paginationKey] = {
       taskIds,
+      terminalIds,
       scrollTop: nextScrollTop,
       ticks: previousPagination.ticks,
       hasTerminal: terminalCount > 0,
@@ -182,6 +196,7 @@ export function createImageTaskStatusPanel(options = {}) {
   const visibleGenerations = new Map();
   const pendingTerminalRenders = new Map();
   let nextGenerationId = 1;
+  let completionSequence = 0;
 
   function createGeneration(page) {
     let invalidate;
@@ -279,6 +294,7 @@ export function createImageTaskStatusPanel(options = {}) {
           state: ['running', 'success', 'error'].includes(task.state) ? task.state : 'running',
         };
         if (Number.isFinite(task.finishedAt)) publishedTask.finishedAt = Number(task.finishedAt);
+        if (Number.isFinite(task.finishedOrder)) publishedTask.finishedOrder = Number(task.finishedOrder);
         return publishedTask;
       }),
       timestamp: Number(now()),
@@ -339,6 +355,7 @@ export function createImageTaskStatusPanel(options = {}) {
     task.stage = stage;
     task.detail = detail;
     task.finishedAt = now();
+    task.finishedOrder = ++completionSequence;
     fallbackDeadlines.set(id, task.finishedAt + terminalFallbackMs);
     publish();
     scheduleRemoval(id, terminalDelayMs);
@@ -353,6 +370,10 @@ export function createImageTaskStatusPanel(options = {}) {
   }
 
   function attachPage(nextPage) {
+    if (currentGeneration.page === (nextPage || null)) {
+      publish();
+      return;
+    }
     currentGeneration.invalidate();
     currentGeneration = createGeneration(nextPage || null);
     publish();

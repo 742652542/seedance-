@@ -16,7 +16,7 @@ page.on('response', (response) => {
 });
 
 await page.bringToFront();
-await page.setViewport({ width: 1920, height: 1080 });
+await page.setViewport({ width: 1920, height: 920 });
 
 async function wait(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));

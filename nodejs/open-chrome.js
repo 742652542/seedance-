@@ -49,12 +49,12 @@ async function openChrome() {
   const browserURL = `http://127.0.0.1:${debugPort}`;
   console.log('开始连接:', browserURL);
 
-  const browser = await puppeteer.connect({ browserURL, defaultViewport: { width: 1920, height: 1080 } });
+  const browser = await puppeteer.connect({ browserURL, defaultViewport: { width: 1920, height: 920 } });
   console.log('已经连接');
 
   const pages = await browser.pages();
   const page = pages[0] || (await browser.newPage());
-  await page.setViewport({ width: 1920, height: 1080 });
+  await page.setViewport({ width: 1920, height: 920 });
   await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   console.log('已打开地址:', TARGET_URL);
 

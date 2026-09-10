@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { createChromeRuntime } from './chrome-runtime.js';
 import { createImageSession, resolveImageModel } from './image-session.js';
 import { createImageTaskStatusPanel } from './image-task-status-panel.js';
 import { runVideoChild } from './video-child-runner.js';
@@ -21,8 +22,7 @@ const RUNNING_DIR = path.join(TASK_ROOT, 'running');
 const RESULTS_DIR = path.join(TASK_ROOT, 'results');
 const REQUESTS_DIR = path.join(TASK_ROOT, 'requests');
 const VIDEO_TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
-const BROWSER_OPEN_API = process.env.BROWSER_OPEN_API || 'http://127.0.0.1:27997/api/v2/profile-open';
-const PROFILE_ID = Number(process.env.PROFILE_ID || 81372);
+const CHROME_USER_DATA_DIR = path.resolve(__dirname, '..', '.chrome-user-data');
 const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
 const PROJECTLIST_URL = 'https://work.xiaomaomi.cn/dramart/projectlist/';
 const LOGIN_URL = 'https://work.xiaomaomi.cn/dramart/login';
@@ -48,7 +48,7 @@ const IMAGE_MODELS = new Set([
 ]);
 const DEFAULT_IMAGE_MODEL = 'ep-20260709194802-qsvc2';
 const VIDEO_PREPARATION_TIMEOUT_MS = Number(process.env.VIDEO_PREPARATION_TIMEOUT_MS || 5 * 60 * 1000);
-const FIXED_VIEWPORT = { width: 1920, height: 1080 };
+const FIXED_VIEWPORT = { width: 1920, height: 920 };
 
 let browserConnection = null;
 let standbyPage = null;
@@ -251,6 +251,13 @@ export function createAuthenticationGate(options) {
   };
 }
 
+const chromeRuntime = createChromeRuntime({
+  userDataDir: CHROME_USER_DATA_DIR,
+  maxAgeMs: 24 * 60 * 60 * 1000,
+  launch: (options) => puppeteer.launch(options),
+  log: debugLog,
+});
+
 const standbyBrowserManager = createStandbyBrowserManager({
   resolveBrowserURL,
   connect: async (browserURL) => {
@@ -420,30 +427,6 @@ async function setViewportToWindow(page) {
   await page.setViewport(FIXED_VIEWPORT);
 }
 
-function findDebugPort(data) {
-  return (
-    data?.data?.debug_port ||
-    data?.data?.debugPort ||
-    data?.data?.debugging_port ||
-    data?.data?.port ||
-    data?.data?.debugging_address?.split(':').at(-1) ||
-    data?.debug_port ||
-    data?.debugPort ||
-    data?.debugging_port ||
-    data?.port
-  );
-}
-
-function findBrowserURL(data) {
-  const ws = data?.data?.ws || data?.ws;
-  if (ws) return String(ws);
-  const direct = data?.data?.browser_url || data?.data?.browserURL || data?.data?.debugging_url || data?.browser_url || data?.browserURL || data?.debugging_url;
-  if (direct) return String(direct);
-  const port = findDebugPort(data);
-  if (!port) return '';
-  return `http://127.0.0.1:${port}`;
-}
-
 function browserConnectOptions(endpoint) {
   return String(endpoint).startsWith('ws:') || String(endpoint).startsWith('wss:')
     ? { browserWSEndpoint: endpoint, defaultViewport: FIXED_VIEWPORT }
@@ -465,25 +448,9 @@ async function resolveBrowserURL() {
     }
   }
 
-  const response = await fetch(BROWSER_OPEN_API, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      profile_id: PROFILE_ID,
-      args: ['--disable-extension-welcome-page'],
-      load_extensions: false,
-      load_default_page: false,
-      is_cookies_cache: false,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(`打开浏览器失败 HTTP ${response.status}: ${JSON.stringify(result)}`);
-
-  const browserURL = findBrowserURL(result);
-  if (!browserURL) throw new Error(`打开浏览器返回中没有连接地址: ${JSON.stringify(result)}`);
-  debugLog(`[browser.open] profile_id=${PROFILE_ID} browser_url=${browserURL}`);
-  return browserURL;
+  const ready = await chromeRuntime.ensure();
+  activeBrowserURL = ready.browserURL;
+  return activeBrowserURL;
 }
 
 function buildCompletedResponse(resultData) {
@@ -576,23 +543,37 @@ function extractError(data, fallback) {
 export function safePanelError(reason) {
   const message = reason instanceof Error ? reason.message : reason == null ? '未知任务错误' : String(reason);
   return message
+    .replace(/https?:\/\/[^\s<>"']+/ig, (value) => {
+      const trailing = value.match(/[),.;!?]+$/)?.[0] || '';
+      const candidate = trailing ? value.slice(0, -trailing.length) : value;
+      try {
+        const url = new URL(candidate);
+        return `${url.origin}${url.pathname}${trailing}`;
+      } catch {
+        return `[url redacted]${trailing}`;
+      }
+    })
     .replace(/\b(authorization\s*[:=]\s*)?(?:basic|bearer)\s+[^\s,;]+/ig, '$1[redacted]')
     .replace(/(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]*/ig, '$1[redacted]')
     .replace(/data:image\/[^;,\s]+;base64,[a-z0-9+/=]+/ig, '[image redacted]')
     .replace(/\b[a-z0-9+/]{80,}={0,2}\b/ig, '[base64 redacted]')
+    .replace(/(["']?\b(?:cookie|set-cookie)["']?)(\s*=\s*)[^\r\n]*/ig, '$1$2[redacted]')
     .replace(/(["']?\b(?:authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|passwd|credentials?|cookie|set-cookie)["']?)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}&}]+)/ig, '$1$2[redacted]')
-    .replace(/(["']?\b(?:prompt|payload|content|images?)["']?)(\s*[:=]\s*)[\s\S]*/i, '$1$2[redacted]')
+    .replace(/(["']?\b(?:prompt|payload|image[-_]?data|base64)["']?)(\s*[:=]\s*)[\s\S]*/i, '$1$2[redacted]')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160);
 }
 
+function safeLog(log, message) {
+  try {
+    const result = log?.(message);
+    if (result != null && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
+  } catch {}
+}
+
 export function safePanelCall(panel, method, args = [], log = debugLog) {
-  const report = (error) => {
-    try {
-      log(`[image-task-status-panel.${method}_error] error=${safePanelError(error)}`);
-    } catch {}
-  };
+  const report = (error) => safeLog(log, `[image-task-status-panel.${method}_error] error=${safePanelError(error)}`);
   try {
     const result = panel?.[method]?.(...args);
     if (result != null && typeof result.then === 'function') {
@@ -771,17 +752,19 @@ export function createImageTaskRunner(options) {
         },
         onProgress: ({ stage, detail }) => safePanelCall(taskStatusPanel, 'update', [id, stage, detail], panelLog),
       });
-    } catch (error) {
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(reason == null ? '未知任务错误' : String(reason));
       safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(error)], panelLog);
+      if (context.taskLifecycle) context.taskLifecycle.panelFailureReported = true;
       throw error;
     }
     const ok = generationResult.status === 'succeeded';
     const resultItem = generationResult.response || generationResult;
     const resultData = buildResultData(ok ? 'success' : 'error', id, resultItem, resultItem, ok ? '' : extractError(generationResult, '图片生成失败'), '', taskContext, action);
     await options.writeJson(context.resultPath, resultData);
-    await options.rm(context.runningPath, { force: true });
     if (ok) safePanelCall(taskStatusPanel, 'succeed', [id], panelLog);
     else safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(resultData.error)], panelLog);
+    await options.rm(context.runningPath, { force: true });
     options.log(`[task.done] task_id=${id} status=${resultData.status} media_url=${resultData.image_url || ''} error=${resultData.error || ''}`);
   };
 }
@@ -900,14 +883,29 @@ const appResultsDir = options.resultsDir || RESULTS_DIR;
 const appRequestsDir = options.requestsDir || REQUESTS_DIR;
 const appVideoTempRoot = options.videoTempRoot || VIDEO_TEMP_ROOT;
 const appImageTaskStatusPanel = options.imageTaskStatusPanel || imageTaskStatusPanel;
+const appImageSession = options.imageSession || (options.imageSessionOptions
+  ? createImageSessionWithStatusPanel(appImageTaskStatusPanel, options.imageSessionOptions)
+  : null);
+const appImageTaskRunner = options.imageTaskRunner || (appImageSession
+  ? createImageTaskRunner({
+    imageSession: appImageSession,
+    statusPanel: appImageTaskStatusPanel,
+    readJson: appReadJson,
+    writeJson: appWriteJson,
+    rm: appRm,
+    log: options.log || debugLog,
+  })
+  : undefined);
+const acquireBrowserLease = options.acquireBrowserLease || (async () => ({ release() {} }));
 const cleanupVideoTempDirs = options.cleanupVideoTempDirs || cleanupAbandonedVideoTempDirs;
 const cleanupVideoTask = options.cleanupVideoTaskResources || cleanupVideoTaskResources;
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const isMissing = (error) => error?.code === 'ENOENT';
 const videoScheduler = createVideoPreparationScheduler({
   start: async (item, markPrepared) => {
-    await authenticate();
+    const browserLease = await acquireBrowserLease();
     try {
+      await authenticate();
       return await runTask(item.id, item.requestPath, item.body, item.action, {
     runningPath: item.runningPath,
     resultPath: item.resultPath,
@@ -940,6 +938,8 @@ const videoScheduler = createVideoPreparationScheduler({
         reportBackgroundError(cleanupError);
       }
       throw error;
+    } finally {
+      await releaseBrowserLeaseSafely(browserLease);
     }
   },
 });
@@ -959,6 +959,14 @@ function reportBackgroundError(error) {
     });
   } catch (reportError) {
     debugLog(`[task.background_error_handler_failed] error=${String(reportError)}`);
+  }
+}
+
+async function releaseBrowserLeaseSafely(browserLease) {
+  try {
+    await browserLease?.release?.();
+  } catch (error) {
+    reportBackgroundError(error);
   }
 }
 
@@ -1015,11 +1023,13 @@ async function persistTaskError(item, reason) {
 
 function observeTask(item, promise) {
   return Promise.resolve(promise)
-    .then(() => null, (error) => {
-      if (item.action === 'generate_image') {
+    .then(() => null, async (reason) => {
+      const error = normalizeTaskError(reason);
+      const resultData = await persistTaskError(item, error);
+      if (item.action === 'generate_image' && resultData && !item.panelFailureReported) {
         safePanelCall(appImageTaskStatusPanel, 'fail', [item.id, safePanelError(error)], debugLog);
       }
-      return persistTaskError(item, error);
+      return resultData;
     })
     .catch((error) => {
       reportBackgroundError(error);
@@ -1191,16 +1201,22 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
   const runPromise = observeTask(runItem, action === 'generate_video'
     ? videoScheduler.enqueue(runItem)
     : Promise.resolve().then(async () => {
-      await authenticate();
-      return runTask(id, requestPath, req.body || {}, action, {
-    runningPath: runItem.runningPath,
-    resultPath: runItem.resultPath,
-    readJson: appReadJson,
-    writeJson: appWriteJson,
-    buildResultData,
-    statusPanel: appImageTaskStatusPanel,
-    imageTaskRunner: options.imageTaskRunner,
-      });
+      const browserLease = await acquireBrowserLease();
+      try {
+        await authenticate();
+        return await runTask(id, requestPath, req.body || {}, action, {
+          runningPath: runItem.runningPath,
+          resultPath: runItem.resultPath,
+          readJson: appReadJson,
+          writeJson: appWriteJson,
+          buildResultData,
+          statusPanel: appImageTaskStatusPanel,
+          imageTaskRunner: appImageTaskRunner,
+          taskLifecycle: runItem,
+        });
+      } finally {
+        await releaseBrowserLeaseSafely(browserLease);
+      }
     }));
 
   if (!req.body?.wait_for_completion) {
@@ -1316,14 +1332,14 @@ export function listenTaskApp(taskApp, options = {}) {
 }
 
 export async function startTaskServer(options = {}) {
-const taskApp = options.taskApp || createTaskApp();
+const taskApp = options.taskApp || createTaskApp({ acquireBrowserLease: () => chromeRuntime.acquire() });
 await taskApp.locals.ready;
 const listen = options.listen || listenTaskApp;
 return listen(taskApp, { port: PORT, host: HOST, onListening: () => {
   console.log(`Seedance Node task server: http://${HOST}:${PORT}`);
   debugLog(`[server] debug=${DEBUG} task_root=${TASK_ROOT}`);
   imageSession.ensureReady().catch((error) => {
-    debugLog(`[image-session.ready_error] open_api=${BROWSER_OPEN_API} error=${String(error)}`);
+    debugLog(`[image-session.ready_error] error=${String(error)}`);
   });
 } });
 }

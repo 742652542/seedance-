@@ -174,6 +174,7 @@ export function createImageSession(options = {}) {
     initializationPromise = null;
     if (invalidated) {
       invalidated.browser.off?.('disconnected', invalidated.onDisconnected);
+      invalidated.page.off?.('domcontentloaded', invalidated.onPageReady);
       if (!invalidated.page.isClosed()) invalidated.page.close().catch(() => {});
     }
   }
@@ -183,7 +184,7 @@ export function createImageSession(options = {}) {
     if (!isConnected(browser)) throw new Error('Browser is disconnected');
     const page = await browser.newPage();
     try {
-      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setViewport({ width: 1920, height: 920 });
       await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
       const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
@@ -205,8 +206,14 @@ export function createImageSession(options = {}) {
       generation += 1;
       const initialized = { browser, page, projectName: 'image', projectId, scriptId, teamId, url, generation };
       initialized.onDisconnected = () => invalidate(initialized.generation);
+      initialized.onPageReady = (frame) => {
+        if (state !== initialized) return;
+        if (typeof page.mainFrame === 'function' && frame && frame !== page.mainFrame()) return;
+        void notify(onSessionReady, page, 'session_ready_callback');
+      };
       state = initialized;
       browser.on?.('disconnected', initialized.onDisconnected);
+      page.on?.('domcontentloaded', initialized.onPageReady);
       await notify(onSessionReady, initialized.page, 'session_ready_callback');
       if (state !== initialized || !isConnected(browser) || page.isClosed()) {
         throw new Error('Image session was invalidated during initialization');

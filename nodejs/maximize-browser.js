@@ -13,7 +13,7 @@ await session.send('Browser.setWindowBounds', {
   bounds: { windowState: 'maximized' },
 });
 
-await page.setViewport({ width: 1920, height: 1080 });
+await page.setViewport({ width: 1920, height: 920 });
 await page.bringToFront();
 await browser.disconnect();
 

@@ -663,7 +663,7 @@ test('manual workflow without a parent marker creates its own page', async () =>
   assert.equal(calls.filter((call) => call.startsWith('mark:')).length, 2);
 });
 
-test('task pages always use a fixed 1920x1080 viewport', async () => {
+test('task pages always use a fixed 1920x920 viewport', async () => {
   const viewports = [];
   const page = {
     evaluate: async (_callback, marker) => marker === undefined ? { width: 800, height: 600 } : undefined,
@@ -678,5 +678,5 @@ test('task pages always use a fixed 1920x1080 viewport', async () => {
 
   await openTaskPage(browser, () => {}, { marker: '' });
 
-  assert.deepEqual(viewports, [{ width: 1920, height: 1080 }]);
+  assert.deepEqual(viewports, [{ width: 1920, height: 920 }]);
 });

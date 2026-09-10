@@ -6,8 +6,6 @@ import puppeteer from 'puppeteer-core';
 import { createVideoTempImages, materializeVideoImages } from './video-temp-images.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BROWSER_OPEN_API = process.env.BROWSER_OPEN_API || 'http://127.0.0.1:27997/api/v2/profile-open';
-const PROFILE_ID = Number(process.env.PROFILE_ID || 81372);
 let activeBrowserURL = process.env.BROWSER_URL || '';
 const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
 const PROJECT_DATE = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
@@ -120,57 +118,31 @@ async function updateTaskStatus(page, step, detail = '', state = 'running') {
 }
 
 async function setViewportToWindow(page) {
-  await page.setViewport({ width: 1920, height: 1080 });
+  await page.setViewport({ width: 1920, height: 920 });
 }
 
-function findDebugPort(data) {
-  return (
-    data?.data?.debug_port ||
-    data?.data?.debugPort ||
-    data?.data?.debugging_port ||
-    data?.data?.port ||
-    data?.data?.debugging_address?.split(':').at(-1) ||
-    data?.debug_port ||
-    data?.debugPort ||
-    data?.debugging_port ||
-    data?.port
-  );
+function browserConnectOptions(endpoint) {
+  return String(endpoint).startsWith('ws:') || String(endpoint).startsWith('wss:')
+    ? { browserWSEndpoint: endpoint, defaultViewport: { width: 1920, height: 920 } }
+    : { browserURL: endpoint, defaultViewport: { width: 1920, height: 920 } };
 }
 
-function findBrowserURL(data) {
-  const direct = data?.data?.browser_url || data?.data?.browserURL || data?.data?.debugging_url || data?.browser_url || data?.browserURL || data?.debugging_url;
-  if (direct) return String(direct);
-  const port = findDebugPort(data);
-  return port ? `http://127.0.0.1:${port}` : '';
+function versionURL(endpoint) {
+  if (!String(endpoint).startsWith('ws')) return `${endpoint.replace(/\/$/, '')}/json/version`;
+  return endpoint.replace(/^ws/, 'http').replace(/\/devtools\/browser\/.+$/, '/json/version');
 }
 
 async function resolveBrowserURL() {
   if (activeBrowserURL) {
     try {
-      const response = await fetch(`${activeBrowserURL.replace(/\/$/, '')}/json/version`, { signal: AbortSignal.timeout(3000) });
+      const response = await fetch(versionURL(activeBrowserURL), { signal: AbortSignal.timeout(3000) });
       if (response.ok) return activeBrowserURL;
     } catch {
       activeBrowserURL = '';
     }
   }
 
-  const response = await fetch(BROWSER_OPEN_API, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      profile_id: PROFILE_ID,
-      args: ['--disable-extension-welcome-page'],
-      load_extensions: false,
-      load_default_page: false,
-      is_cookies_cache: false,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(`打开浏览器失败 HTTP ${response.status}: ${JSON.stringify(result)}`);
-  const browserURL = findBrowserURL(result);
-  if (!browserURL) throw new Error(`打开浏览器返回中没有连接地址: ${JSON.stringify(result)}`);
-  return browserURL;
+  throw new Error('父服务提供的 BROWSER_URL 不可用，请重新启动 Seedance 任务服务');
 }
 
 export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, pageSize = 100, maxPages = 100, api } = {}) {
@@ -1116,7 +1088,7 @@ async function main() {
     materialize: () => materializeVideoImages(tempImages, request.images, imageValue),
     connect: async () => {
       activeBrowserURL = await resolveBrowserURL();
-      return puppeteer.connect({ browserURL: activeBrowserURL, defaultViewport: { width: 1920, height: 1080 } });
+      return puppeteer.connect(browserConnectOptions(activeBrowserURL));
     },
     createPage: openTaskPage,
     prepare: async ({ page }) => {

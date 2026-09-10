@@ -80,6 +80,8 @@ function createHarness(options = {}) {
 
   function makePage() {
     let closed = false;
+    const pageListeners = new Map();
+    const mainFrame = {};
     const page = {
       viewports: [],
       url: '',
@@ -88,6 +90,17 @@ function createHarness(options = {}) {
       setViewport: async (viewport) => { page.viewports.push(viewport); },
       waitForNetworkIdle: async () => {},
       goto: async (url) => { page.url = url; },
+      mainFrame: () => mainFrame,
+      on(event, listener) {
+        const listeners = pageListeners.get(event) || new Set();
+        listeners.add(listener);
+        pageListeners.set(event, listeners);
+      },
+      off(event, listener) { pageListeners.get(event)?.delete(listener); },
+      listenerCount: (event) => pageListeners.get(event)?.size || 0,
+      emitForTest(event, value = mainFrame) {
+        for (const listener of pageListeners.get(event) || []) listener(value);
+      },
       evaluate: async (_fn, args) => {
         if (!args?.requestPath) return { width: 1200, height: 900 };
         calls.push({ path: args.requestPath, body: args.body, timeoutMs: args.timeoutMs, page });
@@ -178,7 +191,7 @@ test('concurrent readiness creates one fixed 9:16 image project and keeps its ca
     assert.equal(a.projectName, 'image');
     assert.equal(a.url, 'https://work.xiaomaomi.cn/dramart/project/project-1/script-1/6a90faa57906980889d712fd/canvas');
     assert.equal(harness.pages[0].isClosed(), false);
-    assert.deepEqual(harness.pages[0].viewports, [{ width: 1920, height: 1080 }]);
+    assert.deepEqual(harness.pages[0].viewports, [{ width: 1920, height: 920 }]);
 
     const create = harness.calls.find((call) => call.path === '/proxy/api/v1/project/create');
     assert.equal(create.body.AspectRatio, '9:16');
@@ -389,6 +402,56 @@ test('onSessionReady can reenter ensureReady while the original caller still awa
       reentrantState = await sessionRef.ensureReady();
       await hookGate.promise;
     },
+  });
+});
+
+test('main-frame DOM reload notifies readiness again and callback failure remains non-fatal', async () => {
+  const harness = createHarness();
+  const readyPages = [];
+  const logs = [];
+  let calls = 0;
+
+  await withSession(harness, async (session) => {
+    const state = await session.ensureReady();
+    assert.deepEqual(readyPages, [state.page]);
+    assert.equal(state.page.listenerCount('domcontentloaded'), 1);
+
+    state.page.emitForTest('domcontentloaded', {});
+    await new Promise(setImmediate);
+    assert.equal(readyPages.length, 1, 'child-frame navigation must be ignored');
+
+    calls = 1;
+    state.page.emitForTest('domcontentloaded');
+    await new Promise(setImmediate);
+    assert.deepEqual(readyPages, [state.page, state.page]);
+    assert.ok(logs.some((line) => line.includes('session_ready_callback_error') && line.includes('reload callback failed')));
+    assert.equal(await session.ensureReady(), state);
+  }, {
+    log: (line) => logs.push(line),
+    onSessionReady: async (page) => {
+      readyPages.push(page);
+      if (calls === 1) throw new Error('reload callback failed');
+    },
+  });
+});
+
+test('page replacement removes the old DOM listener and activates only the new page listener', async () => {
+  const harness = createHarness();
+  const readyPages = [];
+
+  await withSession(harness, async (session) => {
+    const oldState = await session.ensureReady();
+    await oldState.page.close();
+    const newState = await session.ensureReady();
+
+    assert.equal(oldState.page.listenerCount('domcontentloaded'), 0);
+    assert.equal(newState.page.listenerCount('domcontentloaded'), 1);
+    oldState.page.emitForTest('domcontentloaded');
+    newState.page.emitForTest('domcontentloaded');
+    await new Promise(setImmediate);
+    assert.deepEqual(readyPages, [oldState.page, newState.page, newState.page]);
+  }, {
+    onSessionReady: (page) => { readyPages.push(page); },
   });
 });
 

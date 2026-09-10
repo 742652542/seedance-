@@ -159,7 +159,7 @@ function extractIds(createResponse) {
 console.log('第一步：页面操作创建临时项目以捕获请求:', UI_PROJECT_NAME);
 
 await page.bringToFront();
-await page.setViewport({ width: 1920, height: 1080 });
+await page.setViewport({ width: 1920, height: 920 });
 await page.goto(`${BASE_URL}/projectlist/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
 await clickButtonByText(['创建项目', 'Create project']);

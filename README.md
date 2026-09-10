@@ -85,7 +85,23 @@ npm run start:node-task
 http://127.0.0.1:9093
 ```
 
-Dramart 自动化服务还需要本地浏览器配置管理程序和可登录的 Dramart 账号，详细接口及配置说明参见 `docs/task-api.md`。
+Dramart 自动化服务会自动查找并启动当前电脑安装的 Google Chrome，不再依赖 `127.0.0.1:27997` 浏览器管理服务。Chrome 用户缓存保存在项目根目录的 `.chrome-user-data/` 中，该目录不会提交到 Git。
+
+默认按以下顺序查找 Chrome：
+
+1. 环境变量 `CHROME_PATH` 指定的位置。
+2. `C:\Program Files\Google\Chrome\Application\chrome.exe`。
+3. `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`。
+4. 当前用户的 `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`。
+
+如果 Chrome 安装在其他位置，可以先设置：
+
+```cmd
+set CHROME_PATH=D:\你的目录\chrome.exe
+npm run start:node-task
+```
+
+Chrome 连续运行满 24 小时后，服务会等待所有图片和视频任务结束，在任务空闲时自动重启 Chrome。Dramart 账号和接口说明参见 `docs/task-api.md`。
 
 ## 支持模型
 

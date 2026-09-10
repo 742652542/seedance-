@@ -7,7 +7,7 @@ const pages = await browser.pages();
 const page = pages.find((item) => item.url().includes('/dramart')) || pages.at(-1);
 
 await page.bringToFront();
-await page.setViewport({ width: 1920, height: 1080 });
+await page.setViewport({ width: 1920, height: 920 });
 
 async function clickByText(text) {
   const clicked = await page.evaluate((targetText) => {

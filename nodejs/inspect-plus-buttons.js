@@ -5,7 +5,7 @@ const pages = await browser.pages();
 const page = pages.find((item) => item.url().includes('/dramart/project/')) || pages.at(-1);
 
 await page.bringToFront();
-await page.setViewport({ width: 1920, height: 1080 });
+await page.setViewport({ width: 1920, height: 920 });
 
 const pluses = await page.evaluate(() => Array.from(document.querySelectorAll('button, [role="button"], div, span'))
   .map((item) => ({

@@ -38,7 +38,8 @@ function createHarness(initialNow = 1000) {
   };
 }
 
-function createFakeDom(nowValue) {
+function createFakeDom(initialNow) {
+  let nowValue = initialNow;
   class FakeStyle {
     constructor() {
       this.value = '';
@@ -116,7 +117,14 @@ function createFakeDom(nowValue) {
     static now() { return nowValue; }
   }
 
-  return { document, window, Date: FakeDate, intervalCallbacks, walk };
+  return {
+    document,
+    window,
+    Date: FakeDate,
+    intervalCallbacks,
+    walk,
+    setNow(value) { nowValue = value; },
+  };
 }
 
 async function withFakeDom(fakeDom, callback) {
@@ -178,8 +186,8 @@ test('success and failure capture terminal state, finished time, and one three-s
 
   assert.equal(panel.snapshot().activeCount, 0);
   assert.deepEqual(panel.snapshot().tasks, [
-    { id: 'success', startedAt: 1000, stage: '已完成', detail: '结果已保存', state: 'success', finishedAt: 2000 },
-    { id: 'failure', startedAt: 1000, stage: '执行失败', detail: '上游失败', state: 'error', finishedAt: 2500 },
+    { id: 'success', startedAt: 1000, stage: '已完成', detail: '结果已保存', state: 'success', finishedAt: 2000, finishedOrder: 1 },
+    { id: 'failure', startedAt: 1000, stage: '执行失败', detail: '上游失败', state: 'error', finishedAt: 2500, finishedOrder: 2 },
   ]);
   assert.deepEqual([...timers.values()].map(({ delay }) => delay), [3000, 3000]);
 
@@ -748,6 +756,147 @@ test('a terminal task from the middle is rendered last, immediately visible, and
     await panel.flush();
     assert.equal(panel.snapshot().tasks.some(({ id }) => id === 'middle'), false);
   });
+});
+
+test('terminal rows sort by completion time so the newest out-of-order completion is visible last', async () => {
+  const nowValue = 5000;
+  const fakeDom = createFakeDom(nowValue);
+  const page = {
+    isClosed: () => false,
+    async evaluate(fn, argument) { return fn(argument); },
+  };
+  const running = (id) => ({ id, startedAt: 1000, stage: '运行', detail: '', state: 'running' });
+  const terminal = (id, finishedAt) => ({ id, startedAt: 1000, finishedAt, stage: '完成', detail: '', state: 'success' });
+
+  await withFakeDom(fakeDom, async () => {
+    await renderImageTaskStatusPanel(page, {
+      activeCount: 6,
+      tasks: [running('fresh'), terminal('older', 3000), ...['r1', 'r2', 'r3', 'r4', 'r5'].map(running)],
+      timestamp: nowValue,
+    });
+    fakeDom.intervalCallbacks[0]();
+    fakeDom.intervalCallbacks[0]();
+    fakeDom.intervalCallbacks[0]();
+
+    await renderImageTaskStatusPanel(page, {
+      activeCount: 5,
+      tasks: [terminal('fresh', 5000), terminal('older', 3000), ...['r1', 'r2', 'r3', 'r4', 'r5'].map(running)],
+      timestamp: nowValue,
+    });
+
+    const list = fakeDom.document.getElementById('seedance-image-task-status-panel').children[1];
+    assert.equal(list.children.at(-1).textContent.includes('fresh'), true);
+    assert.equal(list.children.at(-2).textContent.includes('older'), true);
+    assert.equal(list.scrollTop, list.scrollHeight - list.clientHeight);
+  });
+});
+
+test('same-millisecond reverse-order completions keep the latest completion visible last', async () => {
+  const currentNow = 5000;
+  let nextTimerId = 1;
+  const timers = new Map();
+  const fakeDom = createFakeDom(currentNow);
+  const page = {
+    isClosed: () => false,
+    async evaluate(fn, argument) { return fn(argument); },
+  };
+  const panel = createImageTaskStatusPanel({
+    now: () => currentNow,
+    setTimeout(callback, delay) {
+      const id = nextTimerId++;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  });
+
+  await withFakeDom(fakeDom, async () => {
+    panel.attachPage(page);
+    ['created-first', 'created-second', 'r1', 'r2', 'r3', 'r4', 'r5'].forEach((id) => panel.add(id, 1000));
+    await panel.flush();
+
+    panel.succeed('created-second');
+    await panel.flush();
+    panel.succeed('created-first');
+    await panel.flush();
+
+    assert.deepEqual(panel.snapshot().tasks.map(({ id }) => id), [
+      'created-first', 'created-second', 'r1', 'r2', 'r3', 'r4', 'r5',
+    ]);
+    const terminalSnapshot = panel.snapshot().tasks.slice(0, 2);
+    assert.deepEqual(terminalSnapshot.map(({ finishedOrder }) => finishedOrder), [2, 1]);
+    terminalSnapshot[0].finishedOrder = 99;
+    assert.equal(panel.snapshot().tasks[0].finishedOrder, 2);
+    const list = fakeDom.document.getElementById('seedance-image-task-status-panel').children[1];
+    assert.equal(list.children.at(-1).textContent.includes('created-first'), true);
+    assert.equal(list.children.at(-2).textContent.includes('created-second'), true);
+    assert.equal(list.scrollTop, list.scrollHeight - list.clientHeight);
+    assert.deepEqual([...timers.values()].map(({ delay }) => delay), [3000, 3000]);
+  });
+});
+
+test('elapsed time advances for running tasks and freezes at finishedAt for both terminal states', async () => {
+  const fakeDom = createFakeDom(3599000);
+  const page = {
+    isClosed: () => false,
+    async evaluate(fn, argument) { return fn(argument); },
+  };
+
+  await withFakeDom(fakeDom, async () => {
+    await renderImageTaskStatusPanel(page, {
+      activeCount: 1,
+      tasks: [
+        { id: 'running', startedAt: 0, stage: '运行', detail: '', state: 'running' },
+        { id: 'success', startedAt: 0, finishedAt: 3600000, stage: '完成', detail: '', state: 'success' },
+        { id: 'error', startedAt: 1000, finishedAt: 60000, stage: '失败', detail: '', state: 'error' },
+      ],
+      timestamp: 3599000,
+    });
+    const panel = fakeDom.document.getElementById('seedance-image-task-status-panel');
+    const elapsed = () => fakeDom.walk(panel)
+      .filter((element) => Object.hasOwn(element.dataset, 'startedAt'))
+      .map((element) => element.textContent);
+    assert.deepEqual(elapsed(), ['59:59', '00:59', '01:00:00']);
+
+    fakeDom.setNow(3661000);
+    fakeDom.intervalCallbacks[0]();
+    assert.deepEqual(elapsed(), ['01:01:01', '00:59', '01:00:00']);
+    fakeDom.setNow(7200000);
+    fakeDom.intervalCallbacks[0]();
+    assert.deepEqual(elapsed(), ['02:00:00', '00:59', '01:00:00']);
+  });
+});
+
+test('reattaching the same page republishes without resetting terminal visibility generation', async () => {
+  let now = 1000;
+  let nextTimerId = 1;
+  const timers = new Map();
+  const page = { isClosed: () => false };
+  const renders = [];
+  const panel = createImageTaskStatusPanel({
+    now: () => now,
+    render: async (_page, snapshot) => { renders.push(snapshot); },
+    setTimeout(callback, delay) {
+      const id = nextTimerId++;
+      timers.set(id, { callback, dueAt: now + delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  });
+
+  panel.attachPage(page);
+  panel.add('terminal', 0);
+  await panel.flush();
+  now = 2000;
+  panel.succeed('terminal');
+  await panel.flush();
+  const timerBefore = [...timers.entries()];
+
+  panel.attachPage(page);
+  panel.attachPage(page);
+  await panel.flush();
+  assert.equal(renders.length, 5);
+  assert.deepEqual([...timers.entries()], timerBefore);
 });
 
 test('ordinary updates preserve pagination position and rotation progress across full rerenders', async () => {
