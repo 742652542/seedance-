@@ -10,10 +10,10 @@ GET  /api/result/{task_id}
 GET  /api/files/{task_id}
 ```
 
-服务默认仅监听 `127.0.0.1:9093`：
+服务默认仅监听 `127.0.0.1:9091`：
 
 ```text
-http://127.0.0.1:9093
+http://127.0.0.1:9091
 ```
 
 如通过 `PORT` 环境变量部署在其他端口，请替换本文示例中的端口。
@@ -588,7 +588,7 @@ GET /api/files/{task_id}
 ### 8.1 提交视频任务
 
 ```bat
-curl -X POST "http://127.0.0.1:9093/api/ask" ^
+curl -X POST "http://127.0.0.1:9091/api/ask" ^
   -H "Content-Type: application/json" ^
   -d "{\"action\":\"generate_video\",\"model\":\"doubao-seedance-2-0-fast-260128\",\"prompt\":\"商品旋转展示，摄影棚光线\",\"images\":[{\"type\":\"reference_image\",\"url\":\"https://example.com/product.jpg\"}],\"resolution\":\"720p\",\"ratio\":\"16:9\",\"duration\":5,\"output_format\":\"mp4\",\"wait_for_completion\":false}"
 ```
@@ -596,7 +596,7 @@ curl -X POST "http://127.0.0.1:9093/api/ask" ^
 ### 8.2 提交生图任务
 
 ```bat
-curl -X POST "http://127.0.0.1:9093/api/ask" ^
+curl -X POST "http://127.0.0.1:9091/api/ask" ^
   -H "Content-Type: application/json" ^
   -d "{\"action\":\"generate_image\",\"model\":\"ep-20260318144532-28ssz\",\"model_name\":\"Doubao-Seedream-5.0-lite\",\"prompt\":\"白色摄影棚商品广告图\",\"images\":[{\"url\":\"https://example.com/product.jpg\"}],\"ratio\":\"1:1\",\"resolution\":\"1k\",\"count\":1,\"wait_for_completion\":false}"
 ```
@@ -604,19 +604,19 @@ curl -X POST "http://127.0.0.1:9093/api/ask" ^
 ### 8.3 查询任务
 
 ```bat
-curl "http://127.0.0.1:9093/api/result/dramart-20260909153000-abc12"
+curl "http://127.0.0.1:9091/api/result/dramart-20260909153000-abc12"
 ```
 
 ### 8.4 获取媒体地址
 
 ```bat
-curl "http://127.0.0.1:9093/api/files/dramart-20260909153000-abc12"
+curl "http://127.0.0.1:9091/api/files/dramart-20260909153000-abc12"
 ```
 
 ## 9. JavaScript 调用示例
 
 ```js
-const baseUrl = 'http://127.0.0.1:9093';
+const baseUrl = 'http://127.0.0.1:9091';
 
 const askResponse = await fetch(`${baseUrl}/api/ask`, {
   method: 'POST',

@@ -82,7 +82,7 @@ npm run start:node-task
 默认服务地址：
 
 ```text
-http://127.0.0.1:9093
+http://127.0.0.1:9091
 ```
 
 Dramart 自动化服务会自动查找并启动当前电脑安装的 Google Chrome，不再依赖 `127.0.0.1:27997` 浏览器管理服务。Chrome 用户缓存保存在项目根目录的 `.chrome-user-data/` 中，该目录不会提交到 Git。

@@ -659,12 +659,12 @@ def health() -> Dict[str, Any]:
     return {
         "success": True,
         "service": "seedance-python-task-server",
-        "port": int(os.getenv("PORT", "9093")),
+        "port": int(os.getenv("PORT", "9091")),
         "ark_base_url": ARK_BASE_URL,
     }
 
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "9093"))
+    port = int(os.getenv("PORT", "9091"))
     uvicorn.run(app, host=host, port=port)

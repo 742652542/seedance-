@@ -14,7 +14,7 @@ import { cleanupAbandonedVideoTempDirs, createVideoTempImages } from './video-te
 export { resolveImageModel } from './image-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT || 9093);
+const PORT = Number(process.env.PORT || 9091);
 const HOST = process.env.HOST || '127.0.0.1';
 const DEBUG = process.env.SEEDANCE_DEBUG !== '0';
 const TASK_ROOT = path.resolve(__dirname, '..', 'seedance_tasks');
