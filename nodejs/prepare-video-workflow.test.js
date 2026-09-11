@@ -2,12 +2,61 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  chooseModel,
   createTaskEpisodeApi,
   ensureProjectForRatioApi,
   openTaskPage,
   prepareVideoTask,
   runVideoWorkflow,
 } from './prepare-video-workflow.js';
+
+test('chooseModel opens the model select regardless of its current value and verifies the selection', async () => {
+  let selected = 'Wan-3.0';
+  let triggerSelector = '';
+  let optionSelector = '';
+  const select = { evaluate: async () => {} };
+  const option = {
+    evaluate: async () => ({ text: 'Doubao-Seedance-2.0-fast', visible: true }),
+  };
+  let optionEvaluation = 0;
+  option.evaluate = async () => {
+    optionEvaluation += 1;
+    if (optionEvaluation === 1) return { text: 'Doubao-Seedance-2.0-fast', visible: true };
+    selected = 'Doubao-Seedance-2.0-fast';
+  };
+  const root = {
+    $: async (selector) => { triggerSelector = selector; return select; },
+    evaluate: async () => selected,
+  };
+  const page = { $$: async (selector) => { optionSelector = selector; return [option]; } };
+
+  assert.equal(await chooseModel(page, 'Doubao-Seedance-2.0-fast', root), 'Doubao-Seedance-2.0-fast');
+  assert.equal(triggerSelector, '.aml-arco-tag-is-dropdown');
+  assert.equal(optionSelector, '.arco-dropdown-menu-item');
+});
+
+test('chooseModel fails when the selected model does not match the request', async () => {
+  const root = {
+    $: async () => ({ evaluate: async () => {} }),
+    evaluate: async () => 'Wan-3.0',
+  };
+  let optionEvaluation = 0;
+  const page = {
+    $$: async () => [{
+      evaluate: async () => {
+        optionEvaluation += 1;
+        return optionEvaluation === 1
+          ? { text: 'Doubao-Seedance-2.0-fast', visible: true }
+          : undefined;
+      },
+    }],
+  };
+
+  await assert.rejects(
+    chooseModel(page, 'Doubao-Seedance-2.0-fast', root),
+    /模型未按请求选中.*Wan-3.0/,
+  );
+});
 
 function harness(overrides = {}) {
   const calls = [];

@@ -15,13 +15,6 @@ const TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
 const TASK_ID = process.env.SEEDANCE_TASK_ID || `dramart-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${randomUUID().replace(/-/g, '').slice(0, 5)}`;
 const TASK_STARTED_AT = new Date().toLocaleString('zh-CN', { hour12: false });
 
-const MODEL_LABELS = {
-  'doubao-seedance-2-5-260628': ['Doubao-Seedance-2.5', 'Seedance-2.5'],
-  'doubao-seedance-2-0-260128': ['Doubao-Seedance-2.0', 'Doubao-Seedance-2-0', 'Seedance-2.0'],
-  'doubao-seedance-2-0-fast-260128': ['Doubao-Seedance-2.0-fast', 'doubao-seedance-2-0-fast'],
-  'doubao-seedance-2-0-mini-260615': ['Doubao-Seedance-2.0-mini', 'Doubao-Seedance-2.0 Mini', 'Seedance-2.0-mini'],
-};
-
 function argValue(name) {
   const prefix = `--${name}=`;
   return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
@@ -49,7 +42,7 @@ function normalizeRequest(request) {
   const imageType = inferImageType(request.image_type, images, imageItemsFromContent);
 
   return {
-    model: request.model || 'doubao-seedance-2-0-fast-260128',
+    model: request.model || 'Doubao-Seedance-2.0-fast',
     prompt: String(request.prompt ?? promptFromContent ?? '').trim(),
     resolution: request.resolution || '720p',
     ratio: request.ratio || '16:9',
@@ -90,7 +83,7 @@ async function updateTaskStatus(page, step, detail = '', state = 'running') {
       panel = document.createElement('section');
       panel.id = panelId;
       panel.style.cssText = [
-        'position:fixed', 'right:20px', 'bottom:20px', 'z-index:2147483647',
+        'position:fixed', 'right:20px', 'bottom:70px', 'z-index:2147483647',
         'width:340px', 'max-width:calc(100vw - 40px)', 'padding:16px',
         'border:1px solid rgba(255,255,255,.16)', 'border-radius:14px',
         'background:rgba(17,24,39,.94)', 'box-shadow:0 16px 45px rgba(0,0,0,.32)',
@@ -548,10 +541,46 @@ async function selectDropdownOption(page, currentTexts, optionTexts, root = null
   return selected;
 }
 
-async function chooseModel(page, model, root) {
-  const labels = MODEL_LABELS[model] || [model];
-  const ok = await selectDropdownOption(page, ['Doubao-Seedance', 'Seedance'], labels, root);
-  if (!ok) console.warn(`未能自动选择模型，保留页面当前模型。目标模型: ${model}`);
+export async function chooseModel(page, model, root) {
+  const select = await root.$('.aml-arco-tag-is-dropdown');
+  if (!select) throw new Error('没有找到分镜视频参数旁的模型下拉框');
+  await select.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    element.click();
+  });
+  await wait(500);
+
+  let targetOption = null;
+  for (const option of await page.$$('.arco-dropdown-menu-item')) {
+    const state = await option.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        text: (element.innerText || element.textContent || '').trim(),
+        visible: bounds.width > 0 && bounds.height > 0,
+      };
+    });
+    if (state.visible && state.text === model) {
+      targetOption = option;
+      break;
+    }
+  }
+  if (!targetOption) throw new Error(`模型下拉框中没有找到请求模型: ${model}`);
+
+  await targetOption.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    element.click();
+  });
+  await wait(500);
+  const selectedModel = await root.evaluate((container) => {
+    const value = container.querySelector('.aml-arco-tag-is-dropdown .arco-tag-content');
+    return (value?.innerText || value?.textContent || '').trim();
+  });
+  if (selectedModel !== model) {
+    throw new Error(`模型未按请求选中，期望 ${model}，实际 ${selectedModel || '未知'}`);
+  }
+  return selectedModel;
 }
 
 async function chooseCompactOption(page, value) {

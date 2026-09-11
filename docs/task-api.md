@@ -82,7 +82,7 @@ Content-Type: application/json
 ```json
 {
   "action": "generate_video",
-  "model": "doubao-seedance-2-0-fast-260128",
+  "model": "Doubao-Seedance-2.0-fast",
   "prompt": "一只小猫在阳光下看向镜头，电影感，柔和光线",
   "images": [
     {
@@ -103,7 +103,7 @@ Content-Type: application/json
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |---|---|---:|---|---|
 | `action` | string | 建议 | 自动判断 | 建议固定传 `generate_video` |
-| `model` | string | 否 | `doubao-seedance-2-0-fast-260128` | Seedance 模型 |
+| `model` | string | 否 | `Doubao-Seedance-2.0-fast` | Seedance 页面模型名称，必须与支持列表完全一致 |
 | `prompt` | string | 是 | 无 | 视频提示词，不能为空 |
 | `images` | array/string | 否 | `[]` | 一张或多张参考图片 |
 | `image` | object/string | 否 | 无 | 单张图片，是 `images` 的简写 |
@@ -124,10 +124,10 @@ Content-Type: application/json
 ### 3.4 支持的视频模型
 
 ```text
-doubao-seedance-2-5-260628
-doubao-seedance-2-0-260128
-doubao-seedance-2-0-fast-260128
-doubao-seedance-2-0-mini-260615
+Doubao-Seedance-2.5
+Doubao-Seedance-2-0
+Doubao-Seedance-2.0-fast
+Doubao-Seedance-2.0-mini
 ```
 
 ### 3.5 视频图片角色
@@ -590,7 +590,7 @@ GET /api/files/{task_id}
 ```bat
 curl -X POST "http://127.0.0.1:9091/api/ask" ^
   -H "Content-Type: application/json" ^
-  -d "{\"action\":\"generate_video\",\"model\":\"doubao-seedance-2-0-fast-260128\",\"prompt\":\"商品旋转展示，摄影棚光线\",\"images\":[{\"type\":\"reference_image\",\"url\":\"https://example.com/product.jpg\"}],\"resolution\":\"720p\",\"ratio\":\"16:9\",\"duration\":5,\"output_format\":\"mp4\",\"wait_for_completion\":false}"
+  -d "{\"action\":\"generate_video\",\"model\":\"Doubao-Seedance-2.0-fast\",\"prompt\":\"商品旋转展示，摄影棚光线\",\"images\":[{\"type\":\"reference_image\",\"url\":\"https://example.com/product.jpg\"}],\"resolution\":\"720p\",\"ratio\":\"16:9\",\"duration\":5,\"output_format\":\"mp4\",\"wait_for_completion\":false}"
 ```
 
 ### 8.2 提交生图任务
@@ -623,7 +623,7 @@ const askResponse = await fetch(`${baseUrl}/api/ask`, {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     action: 'generate_video',
-    model: 'doubao-seedance-2-0-fast-260128',
+    model: 'Doubao-Seedance-2.0-fast',
     prompt: '商品旋转展示，摄影棚光线',
     images: [
       {

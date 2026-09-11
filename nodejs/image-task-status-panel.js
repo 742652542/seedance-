@@ -77,7 +77,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
       panel = document.createElement('section');
       panel.id = panelId;
       panel.style.cssText = [
-        'position:fixed', 'right:20px', 'bottom:20px', 'z-index:2147483647',
+        'position:fixed', 'right:20px', 'bottom:70px', 'z-index:2147483647',
         'width:340px', 'max-width:calc(100vw - 40px)', 'padding:16px',
         'max-height:calc(100vh - 40px)', 'display:flex', 'flex-direction:column',
         'border:1px solid rgba(255,255,255,.16)', 'border-radius:14px',

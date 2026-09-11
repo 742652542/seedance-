@@ -139,7 +139,7 @@ async function updateTaskStatus(page, step, detail = '', state = 'running') {
     if (!panel) {
       panel = document.createElement('section');
       panel.id = panelId;
-      panel.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483647;width:340px;max-width:calc(100vw - 40px);padding:16px;border:1px solid rgba(255,255,255,.16);border-radius:14px;background:rgba(17,24,39,.94);box-shadow:0 16px 45px rgba(0,0,0,.32);color:#f8fafc;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backdrop-filter:blur(12px);pointer-events:none';
+      panel.style.cssText = 'position:fixed;right:20px;bottom:70px;z-index:2147483647;width:340px;max-width:calc(100vw - 40px);padding:16px;border:1px solid rgba(255,255,255,.16);border-radius:14px;background:rgba(17,24,39,.94);box-shadow:0 16px 45px rgba(0,0,0,.32);color:#f8fafc;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backdrop-filter:blur(12px);pointer-events:none';
       document.body.appendChild(panel);
     }
     const color = status === 'success' ? '#34d399' : status === 'error' ? '#fb7185' : '#60a5fa';

@@ -81,7 +81,7 @@ function imageBody(overrides = {}) {
 function videoBody(overrides = {}) {
   return {
     action: 'generate_video',
-    model: 'doubao-seedance-2-0-fast-260128',
+    model: 'Doubao-Seedance-2.0-fast',
     prompt: 'video',
     duration: 5,
     resolution: '720p',
@@ -780,7 +780,7 @@ test('video API routing retains the child-process video workflow', async () => {
   }, async (baseUrl) => {
     await postAsk(baseUrl, {
       action: 'generate_video',
-      model: 'doubao-seedance-2-0-fast-260128',
+      model: 'Doubao-Seedance-2.0-fast',
       prompt: 'video',
       duration: 5,
       resolution: '720p',
@@ -792,6 +792,35 @@ test('video API routing retains the child-process video workflow', async () => {
       script: 'prepare-video-workflow.js',
     });
     assert.deepEqual(taskExecutionPlan('generate_image'), { mode: 'in-process-image-session' });
+  });
+});
+
+test('video API accepts exact UI model names and rejects internal model codes', async () => {
+  const observedModels = [];
+  await withServer(async (id, requestPath, _body, action, context) => {
+    observedModels.push(JSON.parse(await fs.readFile(requestPath, 'utf8')).model);
+    await context.onPrepared({ taskEpisode: { EpisodeId: 'episode', ShotId: 'shot' } });
+    await context.writeJson(context.resultPath, context.buildResultData('error', id, '', {}, 'stopped', '', null, action));
+    await fs.rm(context.runningPath, { force: true });
+  }, async (baseUrl) => {
+    const models = [
+      'Doubao-Seedance-2.5',
+      'Doubao-Seedance-2-0',
+      'Doubao-Seedance-2.0-fast',
+      'Doubao-Seedance-2.0-mini',
+    ];
+    for (const model of models) {
+      const response = await postAsk(baseUrl, videoBody({ model, wait_for_completion: true }));
+      assert.equal(response.status, 'completed', model);
+    }
+
+    const defaulted = await postAsk(baseUrl, videoBody({ model: undefined, wait_for_completion: true }));
+    assert.equal(defaulted.status, 'completed');
+
+    const rejected = await postAsk(baseUrl, videoBody({ model: 'doubao-seedance-2-0-fast-260128' }));
+    assert.equal(rejected.status, 'error');
+    assert.match(rejected.message, /不支持的模型/);
+    assert.deepEqual(observedModels, [...models, 'Doubao-Seedance-2.0-fast']);
   });
 });
 
@@ -883,7 +912,7 @@ test('video completion response keeps key compatibility fields', async () => {
     await context.writeJson(context.resultPath, context.buildResultData('success', id, item, { upstream: true }, '', '', null, action));
     await fs.rm(context.runningPath, { force: true });
   }, async (baseUrl) => {
-    const response = await postAsk(baseUrl, { action: 'generate_video', model: 'doubao-seedance-2-0-fast-260128', prompt: 'video', duration: 5, resolution: '720p', wait_for_completion: true });
+    const response = await postAsk(baseUrl, { action: 'generate_video', model: 'Doubao-Seedance-2.0-fast', prompt: 'video', duration: 5, resolution: '720p', wait_for_completion: true });
     assert.equal(response.status, 'completed');
     assert.equal(response.result.action, 'generate_video');
     assert.match(response.result.task_id, /^dramart-/);

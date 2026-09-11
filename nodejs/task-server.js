@@ -29,10 +29,10 @@ const LOGIN_URL = 'https://work.xiaomaomi.cn/dramart/login';
 const LOGIN_POLL_INTERVAL_MS = Number(process.env.LOGIN_POLL_INTERVAL_MS || 2000);
 const AUTH_CONFIG_PATH = path.resolve(__dirname, '..', 'dramart-auth.json');
 const MODELS = new Set([
-  'doubao-seedance-2-5-260628',
-  'doubao-seedance-2-0-260128',
-  'doubao-seedance-2-0-fast-260128',
-  'doubao-seedance-2-0-mini-260615',
+  'Doubao-Seedance-2.5',
+  'Doubao-Seedance-2-0',
+  'Doubao-Seedance-2.0-fast',
+  'Doubao-Seedance-2.0-mini',
 ]);
 const VIDEO_RESOLUTIONS = new Set(['480p', '720p', '1080p', '4k']);
 const IMAGE_MODELS = new Set([
@@ -656,7 +656,7 @@ function buildContent(body) {
 
 function bodyToPayload(body) {
   let payload = {
-    model: body.model || 'doubao-seedance-2-0-fast-260128',
+    model: body.model || 'Doubao-Seedance-2.0-fast',
     content: buildContent(body),
     resolution: body.resolution || '720p',
     ratio: body.ratio || body.aspect_ratio || body.ratios || '16:9',
@@ -686,7 +686,9 @@ function validatePayload(payload, action = 'generate_video') {
     if (!payload.content?.some((item) => item?.type === 'image_url')) return '图片生成至少需要 1 张参考图';
     return '';
   }
-  if (!MODELS.has(String(payload.model || ''))) return '不支持的模型';
+  if (!MODELS.has(String(payload.model || ''))) {
+    return `不支持的模型，可选值为 ${[...MODELS].join('、')}`;
+  }
   if (!contentPrompt(payload.content)) return 'prompt 不能为空';
   if (!Number.isInteger(payload.duration) || payload.duration <= 0) return 'duration 必须是正整数秒';
   if (!VIDEO_RESOLUTIONS.has(String(payload.resolution || '').toLowerCase())) {
