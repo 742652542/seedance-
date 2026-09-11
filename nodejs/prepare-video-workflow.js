@@ -644,26 +644,27 @@ async function configureVideoOptions(page, request, root) {
   throw new Error(`视频配置未按请求保存，期望 ${JSON.stringify(expectedVideoConfig(request))}，实际 ${JSON.stringify(lastResult?.summary || null)}`);
 }
 
-async function setVideoOptionsOnce(page, request, root) {
+export async function setVideoOptionsOnce(page, request, root) {
   let durationRect = null;
   const targetDuration = String(request.duration);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await openVideoConfigPanel(page, root);
     durationRect = await page.evaluate(() => {
-    const panel = Array.from(document.querySelectorAll('div'))
-      .filter((item) => {
-        const text = (item.innerText || item.textContent || '').trim();
-        const bounds = item.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && text.includes('视频格式');
+    const panels = Array.from(document.querySelectorAll('div'))
+      .filter((container) => {
+        const bounds = container.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0 || !(container.innerText || container.textContent || '').includes('视频时长')) return false;
+        return Array.from(container.querySelectorAll('input')).some((input) => {
+          const inputBounds = input.getBoundingClientRect();
+          return inputBounds.width > 0 && inputBounds.height > 0;
+        });
       })
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
         const br = b.getBoundingClientRect();
         return ar.width * ar.height - br.width * br.height;
-      })[0];
-    if (!panel) return null;
-
-    const durationInput = Array.from(panel.querySelectorAll('input')).find((input) => {
+      });
+    const durationInput = Array.from(panels[0]?.querySelectorAll('input') || []).find((input) => {
       const bounds = input.getBoundingClientRect();
       return bounds.width > 0 && bounds.height > 0;
     });
@@ -674,29 +675,31 @@ async function setVideoOptionsOnce(page, request, root) {
     await wait(700);
   }
 
-  if (!durationRect) throw new Error('没有找到视频时长输入框');
-  await page.mouse.click(durationRect.left + durationRect.width / 2, durationRect.top + durationRect.height / 2, { clickCount: 3 });
-  await page.keyboard.press('Backspace');
-  await page.type('input:focus', targetDuration, { delay: 20 });
-  const durationChanged = await page.evaluate((duration) => {
-    const panel = Array.from(document.querySelectorAll('div'))
-      .filter((item) => {
-        const text = (item.innerText || item.textContent || '').trim();
-        const bounds = item.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && text.includes('视频格式');
+  let durationChanged;
+  if (durationRect) {
+    await page.mouse.click(durationRect.left + durationRect.width / 2, durationRect.top + durationRect.height / 2, { clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await page.type('input:focus', targetDuration, { delay: 20 });
+    durationChanged = await page.evaluate((duration) => {
+    const panels = Array.from(document.querySelectorAll('div'))
+      .filter((container) => {
+        const bounds = container.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0 || !(container.innerText || container.textContent || '').includes('视频时长')) return false;
+        return Array.from(container.querySelectorAll('input')).some((input) => {
+          const inputBounds = input.getBoundingClientRect();
+          return inputBounds.width > 0 && inputBounds.height > 0;
+        });
       })
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
         const br = b.getBoundingClientRect();
         return ar.width * ar.height - br.width * br.height;
-      })[0];
-    if (!panel) return { panel: false };
-
-    const input = Array.from(panel.querySelectorAll('input')).find((item) => {
+      });
+    const input = Array.from(panels[0]?.querySelectorAll('input') || []).find((item) => {
       const bounds = item.getBoundingClientRect();
       return bounds.width > 0 && bounds.height > 0;
     });
-    if (!input) return { panel: true, input: false };
+    if (!input) return { panel: false, input: false };
 
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     setter?.call(input, duration);
@@ -704,7 +707,12 @@ async function setVideoOptionsOnce(page, request, root) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
     input.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
     return { panel: true, input: true, value: input.value };
-  }, targetDuration);
+    }, targetDuration);
+  } else {
+    await openVideoConfigPanel(page, root);
+    durationChanged = await clickVideoConfigButton(page, `${targetDuration}s`);
+    if (!durationChanged.clicked) throw new Error(`没有找到视频时长控件: ${targetDuration}s`);
+  }
   await wait(1000);
 
   const resolutionChanged = await clickVideoConfigButton(page, request.resolution);
@@ -729,43 +737,39 @@ function expectedVideoConfig(request) {
   };
 }
 
-function videoConfigMatches(summary, request) {
+export function videoConfigMatches(summary, request) {
   const compact = String(summary?.compact || '');
   const expected = expectedVideoConfig(request);
   const duration = summary?.duration ? `${Number(summary.duration)}s` : '';
   const resolution = String(summary?.resolution || '');
   const outputFormat = String(summary?.outputFormat || '').toLowerCase();
+  const hiddenDefaultFormat = request.image_type === 'image_to_video' && expected.outputFormat === 'mp4' && summary?.panel && !outputFormat;
   return (duration === expected.duration || compact.includes(expected.duration)) &&
     (resolution === expected.resolution || compact.includes(expected.resolution)) &&
-    (outputFormat === expected.outputFormat || compact.toLowerCase().includes(expected.outputFormat));
+    (outputFormat === expected.outputFormat || compact.toLowerCase().includes(expected.outputFormat) || hiddenDefaultFormat);
 }
 
 async function clickVideoConfigButton(page, text) {
   return page.evaluate((targetText) => {
-    const panel = Array.from(document.querySelectorAll('div'))
-      .filter((item) => {
-        const text = (item.innerText || item.textContent || '').trim();
-        const bounds = item.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && text.includes('视频格式');
+    const panels = Array.from(document.querySelectorAll('div'))
+      .filter((container) => {
+        const bounds = container.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0 || !(container.innerText || container.textContent || '').includes('视频时长')) return false;
+        return Array.from(container.querySelectorAll('button')).some((button) => {
+          const buttonBounds = button.getBoundingClientRect();
+          return buttonBounds.width > 0 && buttonBounds.height > 0 && (button.innerText || button.textContent || '').trim() === targetText;
+        });
       })
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
         const br = b.getBoundingClientRect();
         return ar.width * ar.height - br.width * br.height;
-      })[0];
-    if (!panel) return { panel: false };
-
-    const buttons = Array.from(panel.querySelectorAll('button')).filter((item) => {
-      const itemText = (item.innerText || item.textContent || '').trim();
+      });
+    const button = Array.from(panels[0]?.querySelectorAll('button') || []).find((item) => {
       const bounds = item.getBoundingClientRect();
-      return itemText === targetText && bounds.width > 0 && bounds.height > 0;
+      return bounds.width > 0 && bounds.height > 0 && (item.innerText || item.textContent || '').trim() === targetText;
     });
-    const button = buttons.sort((a, b) => {
-      const ar = a.getBoundingClientRect();
-      const br = b.getBoundingClientRect();
-      return ar.left - br.left;
-    })[0];
-    if (!button) return { panel: true, clicked: false, targetText };
+    if (!button) return { panel: false, clicked: false, targetText };
     button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
     button.click();
@@ -779,7 +783,9 @@ async function readVideoConfigSummary(page) {
       .filter((item) => {
         const text = (item.innerText || item.textContent || '').trim();
         const bounds = item.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && text.includes('视频格式');
+        const hasControl = item.querySelector('input[aria-label="视频时长"]') ||
+          Array.from(item.querySelectorAll('button')).some((button) => /^(?:\d+s|480p|720p|1080p|4k|mp4|mov)$/.test((button.innerText || button.textContent || '').trim()));
+        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && hasControl;
       })
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
@@ -797,10 +803,11 @@ async function readVideoConfigSummary(page) {
         const style = getComputedStyle(button);
         return Number.parseInt(style.fontWeight, 10) >= 600;
       });
+    const selectedDuration = selectedButton(Array.from({ length: 61 }, (_, index) => `${index}s`));
     return {
       panel: Boolean(panel),
       compact: compact || '',
-      duration: durationInput?.value || '',
+      duration: durationInput?.value || (selectedDuration?.innerText || '').trim().replace(/s$/, ''),
       resolution: (selectedButton(['480p', '720p', '1080p', '4k'])?.innerText || '').trim(),
       outputFormat: (selectedButton(['mp4', 'mov'])?.innerText || '').trim().toLowerCase(),
       panelText: panel ? (panel.innerText || panel.textContent || '').trim() : '',
@@ -1184,7 +1191,7 @@ async function main() {
     },
     execute: async ({ imageFiles, page, prepared }) => {
       const { project, taskEpisode, networkCaptures } = prepared;
-      const shotModule = await getTaskShotModule(page);
+      let shotModule = await getTaskShotModule(page);
 
     console.log('准备填写视频工作流参数:', {
       ...request,
@@ -1192,13 +1199,17 @@ async function main() {
     });
 
     const referenceLabel = await chooseReferenceType(page, request.image_type, shotModule);
+    shotModule = await getTaskShotModule(page);
     await updateTaskStatus(page, '正在填写视频参数', `${request.model} · ${request.duration}s · ${request.resolution} · ${request.output_format}`);
     await chooseModel(page, request.model, shotModule);
     await wait(2000);
+    shotModule = await getTaskShotModule(page);
     await configureVideoOptions(page, request, shotModule);
+    shotModule = await getTaskShotModule(page);
     await clearExistingImages(page, shotModule);
     await uploadImages(page, imageFiles, shotModule);
     await updateTaskStatus(page, '参考图上传完成', `${imageFiles.length} 张图片`);
+    shotModule = await getTaskShotModule(page);
     await pastePrompt(page, request.prompt, shotModule);
     await wait(2000);
     const verifiedShot = await verifyCurrentTaskShot(page, taskEpisode, request);

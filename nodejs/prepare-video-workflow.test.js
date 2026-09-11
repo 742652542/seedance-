@@ -8,7 +8,9 @@ import {
   openTaskPage,
   prepareVideoTask,
   runVideoWorkflow,
+  setVideoOptionsOnce,
   uploadImages,
+  videoConfigMatches,
 } from './prepare-video-workflow.js';
 
 test('chooseModel opens the model select regardless of its current value and verifies the selection', async () => {
@@ -184,6 +186,40 @@ test('uploadImages immediately returns ark asset validation errors wrapped in HT
   assert.equal(await responsePredicate(errorResponse), true);
   responseGate.resolve(errorResponse);
   await rejection;
+});
+
+test('video options use a duration button when image-to-video mode has no duration input', async () => {
+  const evaluatedTargets = [];
+  const page = {
+    evaluate: async (_callback, target) => {
+      if (target === undefined) return null;
+      evaluatedTargets.push(target);
+      if (target === '10s' || target === '720p' || target === 'mp4') {
+        return { panel: true, clicked: true, targetText: target };
+      }
+      return null;
+    },
+    keyboard: { press: async () => {} },
+  };
+  const root = { evaluate: async () => true };
+
+  const result = await setVideoOptionsOnce(page, {
+    duration: 10,
+    resolution: '720p',
+    output_format: 'mp4',
+  }, root);
+
+  assert.deepEqual(evaluatedTargets, ['10s', '720p', 'mp4']);
+  assert.equal(result.duration.clicked, true);
+});
+
+test('image-to-video accepts a hidden default mp4 control but reference mode remains strict', () => {
+  const summary = { panel: true, duration: '10', resolution: '720p', outputFormat: '' };
+  const request = { duration: 10, resolution: '720p', output_format: 'mp4', image_type: 'image_to_video' };
+
+  assert.equal(videoConfigMatches(summary, request), true);
+  assert.equal(videoConfigMatches(summary, { ...request, image_type: 'reference_image' }), false);
+  assert.equal(videoConfigMatches(summary, { ...request, output_format: 'mov' }), false);
 });
 
 function project(overrides = {}) {
