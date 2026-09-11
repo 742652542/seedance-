@@ -813,9 +813,26 @@ export async function uploadImages(page, files, root, options = {}) {
   const input = await root.$('input[type="file"]');
   if (!input) throw new Error('没有找到图片上传 input[type=file]');
   const timeout = options.timeoutMs ?? IMAGE_UPLOAD_TIMEOUT_MS;
-  const savedResponse = page.waitForResponse((response) => {
+  const assetErrors = new WeakMap();
+  const savedResponse = page.waitForResponse(async (response) => {
     const request = response.request();
-    if (request.method() !== 'POST' || !/\/proxy\/api\/v1\/shot\/update(?:\?|$)/i.test(response.url())) return false;
+    if (request.method() !== 'POST') return false;
+    if (/\/proxy\/api\/v1\/asset\/ark_asset\/create(?:\?|$)/i.test(response.url())) {
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {}
+      const upstreamError = data?.ResponseMetadata?.Error || data?.responseMetadata?.error;
+      if (upstreamError || !response.ok()) {
+        assetErrors.set(response, {
+          code: upstreamError?.Code || upstreamError?.code || `HTTP ${response.status()}`,
+          message: upstreamError?.MessageZh || upstreamError?.messageZh || upstreamError?.Message || upstreamError?.message || '',
+        });
+        return true;
+      }
+      return false;
+    }
+    if (!/\/proxy\/api\/v1\/shot\/update(?:\?|$)/i.test(response.url())) return false;
     try {
       const body = JSON.parse(request.postData() || '{}');
       return (body.Shot?.VideoMeta?.RefImages?.length || 0) >= files.length;
@@ -836,6 +853,10 @@ export async function uploadImages(page, files, root, options = {}) {
     response = await savedResponse;
   } catch (error) {
     throw new Error(`等待参考图写入分镜超时 (${timeout}ms): ${String(error)}`);
+  }
+  const assetError = assetErrors.get(response);
+  if (assetError) {
+    throw new Error(`参考图素材创建失败 ${assetError.code}${assetError.message ? `: ${assetError.message}` : ''}`);
   }
   if (!response.ok()) {
     throw new Error(`参考图写入分镜失败 HTTP ${response.status()}`);

@@ -119,7 +119,7 @@ test('uploadImages waits for the shot update containing every uploaded reference
     }),
     ok: () => true,
   };
-  assert.equal(responsePredicate(matchingResponse), true);
+  assert.equal(await responsePredicate(matchingResponse), true);
   responseGate.resolve(matchingResponse);
   await pending;
 });
@@ -145,8 +145,44 @@ test('uploadImages ignores shot updates that do not contain all references', asy
       postData: () => JSON.stringify({ Shot: { VideoMeta: { RefImages: [{ Key: 'one' }] } } }),
     }),
   };
-  assert.equal(responsePredicate(partialResponse), false);
+  assert.equal(await responsePredicate(partialResponse), false);
   responseGate.reject(new Error('timeout'));
+  await rejection;
+});
+
+test('uploadImages immediately returns ark asset validation errors wrapped in HTTP 200', async () => {
+  const responseGate = deferred();
+  let responsePredicate;
+  const page = {
+    waitForResponse: (predicate) => {
+      responsePredicate = predicate;
+      return responseGate.promise;
+    },
+  };
+  const root = { $: async () => ({ uploadFile: async () => {} }) };
+  const pending = uploadImages(page, ['short.png'], root, { timeoutMs: 120000 });
+  const rejection = assert.rejects(
+    pending,
+    /参考图素材创建失败 InvalidParameter\.HeightTooSmall: Height must be between 300px and 6000px\./,
+  );
+  await new Promise(setImmediate);
+
+  const errorResponse = {
+    url: () => 'https://work.xiaomaomi.cn/proxy/api/v1/asset/ark_asset/create',
+    request: () => ({ method: () => 'POST' }),
+    status: () => 200,
+    ok: () => true,
+    json: async () => ({
+      ResponseMetadata: {
+        Error: {
+          Code: 'InvalidParameter.HeightTooSmall',
+          Message: 'Height must be between 300px and 6000px.',
+        },
+      },
+    }),
+  };
+  assert.equal(await responsePredicate(errorResponse), true);
+  responseGate.resolve(errorResponse);
   await rejection;
 });
 
