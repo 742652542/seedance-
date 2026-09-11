@@ -10,6 +10,7 @@ let activeBrowserURL = process.env.BROWSER_URL || '';
 const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
 const PROJECT_DATE = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
 const GENERATION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 15 * 60 * 1000);
+const IMAGE_UPLOAD_TIMEOUT_MS = Number(process.env.IMAGE_UPLOAD_TIMEOUT_MS || 2 * 60 * 1000);
 const SUBMIT_DELAY_MS = Number(process.env.SUBMIT_DELAY_MS || 3 * 1000);
 const TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
 const TASK_ID = process.env.SEEDANCE_TASK_ID || `dramart-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${randomUUID().replace(/-/g, '').slice(0, 5)}`;
@@ -807,12 +808,38 @@ async function readVideoConfigSummary(page) {
   });
 }
 
-async function uploadImages(page, files, root) {
+export async function uploadImages(page, files, root, options = {}) {
   if (!files.length) return;
   const input = await root.$('input[type="file"]');
   if (!input) throw new Error('没有找到图片上传 input[type=file]');
-  await input.uploadFile(...files);
-  await wait(3000);
+  const timeout = options.timeoutMs ?? IMAGE_UPLOAD_TIMEOUT_MS;
+  const savedResponse = page.waitForResponse((response) => {
+    const request = response.request();
+    if (request.method() !== 'POST' || !/\/proxy\/api\/v1\/shot\/update(?:\?|$)/i.test(response.url())) return false;
+    try {
+      const body = JSON.parse(request.postData() || '{}');
+      return (body.Shot?.VideoMeta?.RefImages?.length || 0) >= files.length;
+    } catch {
+      return false;
+    }
+  }, { timeout });
+
+  try {
+    await input.uploadFile(...files);
+  } catch (error) {
+    savedResponse.catch(() => {});
+    throw error;
+  }
+
+  let response;
+  try {
+    response = await savedResponse;
+  } catch (error) {
+    throw new Error(`等待参考图写入分镜超时 (${timeout}ms): ${String(error)}`);
+  }
+  if (!response.ok()) {
+    throw new Error(`参考图写入分镜失败 HTTP ${response.status()}`);
+  }
 }
 
 async function clearExistingImages(page, root) {

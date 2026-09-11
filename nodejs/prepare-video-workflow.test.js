@@ -8,6 +8,7 @@ import {
   openTaskPage,
   prepareVideoTask,
   runVideoWorkflow,
+  uploadImages,
 } from './prepare-video-workflow.js';
 
 test('chooseModel opens the model select regardless of its current value and verifies the selection', async () => {
@@ -85,6 +86,69 @@ function deferred() {
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 }
+
+test('uploadImages waits for the shot update containing every uploaded reference', async () => {
+  const responseGate = deferred();
+  let responsePredicate;
+  let waitOptions;
+  const uploadCalls = [];
+  const page = {
+    waitForResponse: (predicate, options) => {
+      responsePredicate = predicate;
+      waitOptions = options;
+      return responseGate.promise;
+    },
+  };
+  const root = {
+    $: async () => ({ uploadFile: async (...files) => { uploadCalls.push(files); } }),
+  };
+
+  const pending = uploadImages(page, ['one.png', 'two.png'], root, { timeoutMs: 1234 });
+  let settled = false;
+  pending.finally(() => { settled = true; }).catch(() => {});
+  await new Promise(setImmediate);
+
+  assert.deepEqual(uploadCalls, [['one.png', 'two.png']]);
+  assert.equal(waitOptions.timeout, 1234);
+  assert.equal(settled, false);
+  const matchingResponse = {
+    url: () => 'https://work.xiaomaomi.cn/proxy/api/v1/shot/update',
+    request: () => ({
+      method: () => 'POST',
+      postData: () => JSON.stringify({ Shot: { VideoMeta: { RefImages: [{ Key: 'one' }, { Key: 'two' }] } } }),
+    }),
+    ok: () => true,
+  };
+  assert.equal(responsePredicate(matchingResponse), true);
+  responseGate.resolve(matchingResponse);
+  await pending;
+});
+
+test('uploadImages ignores shot updates that do not contain all references', async () => {
+  let responsePredicate;
+  const responseGate = deferred();
+  const page = {
+    waitForResponse: (predicate) => {
+      responsePredicate = predicate;
+      return responseGate.promise;
+    },
+  };
+  const root = { $: async () => ({ uploadFile: async () => {} }) };
+  const pending = uploadImages(page, ['one.png', 'two.png'], root, { timeoutMs: 10 });
+  const rejection = assert.rejects(pending, /等待参考图写入分镜超时 \(10ms\)/);
+  await new Promise(setImmediate);
+
+  const partialResponse = {
+    url: () => 'https://work.xiaomaomi.cn/proxy/api/v1/shot/update',
+    request: () => ({
+      method: () => 'POST',
+      postData: () => JSON.stringify({ Shot: { VideoMeta: { RefImages: [{ Key: 'one' }] } } }),
+    }),
+  };
+  assert.equal(responsePredicate(partialResponse), false);
+  responseGate.reject(new Error('timeout'));
+  await rejection;
+});
 
 function project(overrides = {}) {
   return {
