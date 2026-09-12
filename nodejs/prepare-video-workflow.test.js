@@ -5,13 +5,28 @@ import {
   chooseModel,
   createTaskEpisodeApi,
   ensureProjectForRatioApi,
+  isVideoConfigSummaryText,
   openTaskPage,
   prepareVideoTask,
   runVideoWorkflow,
   setVideoOptionsOnce,
+  summarizeVideoMetaInput,
   uploadImages,
   videoConfigMatches,
 } from './prepare-video-workflow.js';
+
+test('video config opener recognizes a current mov summary before changing it to mp4', () => {
+  assert.equal(isVideoConfigSummaryText('5s | 720p | 1个 | mov'), true);
+});
+
+test('shot verification reads first-frame prompt and image fields', () => {
+  assert.deepEqual(summarizeVideoMetaInput({
+    Prompt: '',
+    RefImages: [],
+    KeyFramePrompt: 'first-frame prompt',
+    KeyFrameImages: { HeadImage: { Key: 'head.png' } },
+  }), { prompt: 'first-frame prompt', imageCount: 1 });
+});
 
 test('chooseModel opens the model select regardless of its current value and verifies the selection', async () => {
   let selected = 'Wan-3.0';
@@ -152,6 +167,34 @@ test('uploadImages ignores shot updates that do not contain all references', asy
   await rejection;
 });
 
+test('uploadImages recognizes first-frame persistence in KeyFrameImages', async () => {
+  const responseGate = deferred();
+  let responsePredicate;
+  const page = {
+    waitForResponse: (predicate) => {
+      responsePredicate = predicate;
+      return responseGate.promise;
+    },
+  };
+  const root = { $: async () => ({ uploadFile: async () => {} }) };
+  const pending = uploadImages(page, ['first-frame.png'], root);
+  await new Promise(setImmediate);
+  const response = {
+    url: () => 'https://work.xiaomaomi.cn/proxy/api/v1/shot/update',
+    request: () => ({
+      method: () => 'POST',
+      postData: () => JSON.stringify({
+        Shot: { VideoMeta: { RefImages: [], KeyFrameImages: { HeadImage: { Key: 'head.png' } } } },
+      }),
+    }),
+    ok: () => true,
+  };
+
+  assert.equal(await responsePredicate(response), true);
+  responseGate.resolve(response);
+  await pending;
+});
+
 test('uploadImages immediately returns ark asset validation errors wrapped in HTTP 200', async () => {
   const responseGate = deferred();
   let responsePredicate;
@@ -220,6 +263,14 @@ test('image-to-video accepts a hidden default mp4 control but reference mode rem
   assert.equal(videoConfigMatches(summary, request), true);
   assert.equal(videoConfigMatches(summary, { ...request, image_type: 'reference_image' }), false);
   assert.equal(videoConfigMatches(summary, { ...request, output_format: 'mov' }), false);
+});
+
+test('image-to-video accepts hidden default resolution and format controls', () => {
+  const summary = { panel: true, duration: '10', resolution: '', outputFormat: '' };
+  const request = { duration: 10, resolution: '720p', output_format: 'mp4', image_type: 'image_to_video' };
+
+  assert.equal(videoConfigMatches(summary, request), true);
+  assert.equal(videoConfigMatches(summary, { ...request, image_type: 'reference_image' }), false);
 });
 
 function project(overrides = {}) {
@@ -597,6 +648,7 @@ test('project creation accepts lowercase result and ID fields', async () => {
   assert.equal(result.projectId, 'project-lower');
   assert.equal(result.scriptId, 'script-lower');
   assert.equal(result.status, 'resource_confirmed');
+  assert.equal(calls.find((call) => call.requestPath.endsWith('/project/create')).body.VisualPromptId, 'realistic_modern_urban');
   assert.equal(calls.filter((call) => call.requestPath.endsWith('/project/update')).length, 2);
 });
 

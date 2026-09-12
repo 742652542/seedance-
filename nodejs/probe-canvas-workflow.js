@@ -1,8 +1,9 @@
 import puppeteer from 'puppeteer-core';
+import { resolveDramartTeamId } from './dramart-team.js';
 
 const OPEN_API = process.env.BROWSER_OPEN_API || 'http://127.0.0.1:27997/api/v2/profile-open';
 const PROFILE_ID = Number(process.env.PROFILE_ID || 81372);
-const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
+const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECT_NAME = process.env.PROJECT_NAME || '';
 const PROJECTLIST_URL = 'https://work.xiaomaomi.cn/dramart/projectlist/';
 
@@ -60,6 +61,7 @@ attachNetwork(page);
 await page.bringToFront();
 await page.goto(PROJECTLIST_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
+const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
 
 const project = await page.evaluate(async ({ teamId, projectName }) => {
   const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
@@ -85,7 +87,7 @@ const project = await page.evaluate(async ({ teamId, projectName }) => {
     scriptId: target.ScriptId,
     teamId: target.TeamId || teamId,
   };
-}, { teamId: TEAM_ID, projectName: PROJECT_NAME });
+}, { teamId, projectName: PROJECT_NAME });
 
 const canvasUrl = `https://work.xiaomaomi.cn/dramart/project/${project.projectId}/${project.scriptId}/${project.teamId}/canvas`;
 console.log('canvasUrl', canvasUrl);

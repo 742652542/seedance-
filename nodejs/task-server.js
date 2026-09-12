@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { createChromeRuntime } from './chrome-runtime.js';
+import { resolveDramartTeamId } from './dramart-team.js';
 import { createImageSession, resolveImageModel } from './image-session.js';
 import { createImageTaskStatusPanel } from './image-task-status-panel.js';
 import { runVideoChild } from './video-child-runner.js';
@@ -23,7 +24,7 @@ const RESULTS_DIR = path.join(TASK_ROOT, 'results');
 const REQUESTS_DIR = path.join(TASK_ROOT, 'requests');
 const VIDEO_TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
 const CHROME_USER_DATA_DIR = path.resolve(__dirname, '..', '.chrome-user-data');
-const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
+const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECTLIST_URL = 'https://work.xiaomaomi.cn/dramart/projectlist/';
 const LOGIN_URL = 'https://work.xiaomaomi.cn/dramart/login';
 const LOGIN_POLL_INTERVAL_MS = Number(process.env.LOGIN_POLL_INTERVAL_MS || 2000);
@@ -53,6 +54,7 @@ const FIXED_VIEWPORT = { width: 1920, height: 920 };
 let browserConnection = null;
 let standbyPage = null;
 let activeBrowserURL = process.env.BROWSER_URL || '';
+let currentTeamId = CONFIGURED_TEAM_ID;
 
 function debugLog(message) {
   if (DEBUG) console.log(message);
@@ -279,7 +281,9 @@ async function ensureStandbyBrowser() {
 async function authenticationState(page) {
   await page.goto(PROJECTLIST_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 }).catch(() => {});
-  return page.evaluate(async ({ teamId }) => {
+  try {
+    const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
+    const authenticated = await page.evaluate(async ({ teamId }) => {
     const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
     const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
     if (!token || location.pathname.includes('/login')) return false;
@@ -303,7 +307,12 @@ async function authenticationState(page) {
     } catch {
       return false;
     }
-  }, { teamId: TEAM_ID });
+    }, { teamId });
+    if (authenticated) currentTeamId = teamId;
+    return authenticated;
+  } catch {
+    return false;
+  }
 }
 
 async function firstExistingSelector(page, selectors, timeoutMs = 30000) {
@@ -387,6 +396,7 @@ const authenticationGate = createAuthenticationGate({
 export async function ensureAuthenticated() {
   await authenticationGate.ensure();
   debugLog('[auth.ready] task dispatch resumed');
+  return currentTeamId;
 }
 
 const imageTaskStatusPanel = createImageTaskStatusPanel({
@@ -416,6 +426,8 @@ const imageSession = createImageSessionWithStatusPanel(imageTaskStatusPanel, { s
     await ensureAuthenticated();
     return browserConnection;
   },
+  getTeamId: async (page) => currentTeamId || resolveDramartTeamId(page, CONFIGURED_TEAM_ID),
+  getKnownTeamId: () => currentTeamId,
   fetch,
   fs,
   generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS || 15 * 60 * 1000),
@@ -826,6 +838,7 @@ export async function runDramartTask(id, requestPath, body, action = 'generate_v
       env: {
         ...process.env,
         BROWSER_URL: ready.browserURL || activeBrowserURL,
+        TEAM_ID: taskOptions.teamId || currentTeamId,
         SEEDANCE_TASK_ID: id,
         SEEDANCE_TASK_PAGE_MARKER: pageMarker,
         SUBMIT_DELAY_MS: String(process.env.SUBMIT_DELAY_MS || 3000),

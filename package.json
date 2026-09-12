@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "start:node-task": "node nodejs/task-server.js",
-    "test": "node --test nodejs/chrome-runtime.test.js nodejs/image-task-status-panel.test.js nodejs/video-preparation-scheduler.test.js nodejs/video-child-runner.test.js nodejs/video-temp-images.test.js nodejs/prepare-video-workflow.test.js nodejs/image-session.test.js nodejs/live-image-concurrency-test.test.js nodejs/task-server.test.js"
+    "test": "node --test nodejs/chrome-runtime.test.js nodejs/dramart-team.test.js nodejs/image-task-status-panel.test.js nodejs/video-preparation-scheduler.test.js nodejs/video-child-runner.test.js nodejs/video-temp-images.test.js nodejs/prepare-video-workflow.test.js nodejs/image-session.test.js nodejs/live-image-concurrency-test.test.js nodejs/task-server.test.js"
   },
   "dependencies": {
     "express": "^4.19.2",

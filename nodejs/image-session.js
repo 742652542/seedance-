@@ -1,9 +1,10 @@
 import nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDramartTeamId } from './dramart-team.js';
 
-const DEFAULT_TEAM_ID = '6a90faa57906980889d712fd';
 const DEFAULT_TEMP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tmp-upload-images');
+const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
 const IMAGE_MODEL_MAP = {
   'Doubao-Seedream-5.0-Pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'doubao-seedream-5-0-pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
@@ -58,7 +59,7 @@ function normalizeRequest(request) {
     ratio: request.ratio || request.aspect_ratio || request.ratios || '9:16',
     resolution: request.resolution || '1k',
     count: Math.max(1, Number(request.count || request.n || 1)),
-    styleId: request.style_id || request.styleId || '6a9658a204b6dbdd6d21ce84',
+    styleId: request.style_id || request.styleId || DEFAULT_VISUAL_PROMPT_ID,
     images: Array.isArray(request.images) ? request.images : request.images ? [request.images] : [],
   };
 }
@@ -142,7 +143,9 @@ export function createImageSession(options = {}) {
   if (typeof getBrowser !== 'function') throw new TypeError('getBrowser is required');
   const fetchImpl = options.fetch || globalThis.fetch;
   const fs = options.fs || nodeFs;
-  const teamId = options.teamId || DEFAULT_TEAM_ID;
+  const configuredTeamId = options.teamId || process.env.TEAM_ID || '';
+  const getTeamId = options.getTeamId || ((page) => resolveDramartTeamId(page, configuredTeamId));
+  const getKnownTeamId = options.getKnownTeamId;
   const tempRoot = options.tempRoot || DEFAULT_TEMP_ROOT;
   const pollIntervalMs = options.pollIntervalMs ?? 3000;
   const generationTimeoutMs = options.generationTimeoutMs ?? 15 * 60 * 1000;
@@ -187,12 +190,14 @@ export function createImageSession(options = {}) {
       await page.setViewport({ width: 1920, height: 920 });
       await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
+      const teamId = await getTeamId(page);
+      if (!teamId) throw new Error('当前登录账号没有可用团队');
       const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
         TeamId: teamId,
         AspectRatio: '9:16',
         Resolution: '720p',
         Language: 'en',
-        VisualPromptId: '6a9658a204b6dbdd6d21ce84',
+        VisualPromptId: DEFAULT_VISUAL_PROMPT_ID,
         CreationMode: 'manual',
       }, requestTimeoutMs);
       const projectId = createResult.Result?.ProjectId;
@@ -226,7 +231,11 @@ export function createImageSession(options = {}) {
   }
 
   function ensureReady() {
-    if (state && isConnected(state.browser) && !state.page.isClosed()) return Promise.resolve(state);
+    if (state && isConnected(state.browser) && !state.page.isClosed()) {
+      const knownTeamId = getKnownTeamId?.();
+      if (!knownTeamId || knownTeamId === state.teamId) return Promise.resolve(state);
+      invalidate(state.generation);
+    }
     if (initializationPromise) return initializationPromise;
     if (state) invalidate(state.generation);
     if (!initializationPromise) {

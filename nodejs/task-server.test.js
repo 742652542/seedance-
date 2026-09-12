@@ -1108,8 +1108,10 @@ test('parent marker env is used by the child workflow to select the exact create
       runningPath: path.join(root, 'running.json'),
       resultPath: path.join(root, 'result.json'),
       ensureStandbyBrowser: async () => ({ browser, browserURL: 'http://browser' }),
+      teamId: 'team-current',
       runVideoChild: async ({ options }) => {
         const marker = options.env.SEEDANCE_TASK_PAGE_MARKER;
+        assert.equal(options.env.TEAM_ID, 'team-current');
         calls.push(`spawn:${marker}`);
         const selected = await openTaskPage(browser, () => {}, { marker, setViewport: async () => {} });
         assert.equal(selected, taskPage);

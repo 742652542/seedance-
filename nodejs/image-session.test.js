@@ -153,6 +153,7 @@ async function withSession(harness, callback, options = {}) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'image-session-test-'));
   const session = createImageSession({
     getBrowser: harness.getBrowser,
+    getTeamId: async () => 'team-current',
     fetch: harness.fetch,
     fs,
     tempRoot,
@@ -189,12 +190,13 @@ test('concurrent readiness creates one fixed 9:16 image project and keeps its ca
     const [a, b] = await Promise.all([first, second]);
     assert.equal(a, b);
     assert.equal(a.projectName, 'image');
-    assert.equal(a.url, 'https://work.xiaomaomi.cn/dramart/project/project-1/script-1/6a90faa57906980889d712fd/canvas');
+    assert.equal(a.url, 'https://work.xiaomaomi.cn/dramart/project/project-1/script-1/team-current/canvas');
     assert.equal(harness.pages[0].isClosed(), false);
     assert.deepEqual(harness.pages[0].viewports, [{ width: 1920, height: 920 }]);
 
     const create = harness.calls.find((call) => call.path === '/proxy/api/v1/project/create');
     assert.equal(create.body.AspectRatio, '9:16');
+    assert.equal(create.body.VisualPromptId, 'realistic_modern_urban');
     const updates = harness.calls.filter((call) => call.path === '/proxy/api/v1/project/update');
     assert.equal(updates[0].body.ProjectName, 'image');
     assert.equal(updates[1].body.Status, 'resource_confirmed');
@@ -236,7 +238,7 @@ test('tasks submit concurrently with independent requested ratios', async () => 
     assert.ok(submissions.every((call) => !('Resolution' in call.body)));
     assert.ok(submissions.every((call) => !('AspectRatio' in call.body.GenerationParams[0])));
     assert.ok(submissions.every((call) => !('Resolution' in call.body.GenerationParams[0])));
-    assert.ok(submissions.every((call) => JSON.stringify(call.body.ParsedPrompt) === JSON.stringify({ StyleId: '6a9658a204b6dbdd6d21ce84' })));
+    assert.ok(submissions.every((call) => JSON.stringify(call.body.ParsedPrompt) === JSON.stringify({ StyleId: 'realistic_modern_urban' })));
     assert.ok(submissions.every((call) => call.body.ProjectId === 'shared-project'));
     firstListGate.resolve();
     await Promise.all([first, second]);
@@ -574,7 +576,7 @@ test('page closure after submission recovers and polls the old target without re
     assert.equal(submitCount, 1);
     assert.equal(replacement.calls.filter((call) => call.path === '/proxy/api/v1/project/create').length, 1);
     const recoveredPoll = replacement.calls.find((call) => call.path.endsWith('/list'));
-    assert.equal(recoveredPoll.body.TeamId, '6a90faa57906980889d712fd');
+    assert.equal(recoveredPoll.body.TeamId, 'team-current');
     assert.equal(recoveredPoll.body.ProjectId, 'old-project');
     assert.equal(recoveredPoll.body.ScriptId, 'old-script');
     assert.deepEqual(recoveredPoll.body.Filters.ResourceIds, ['old-resource']);

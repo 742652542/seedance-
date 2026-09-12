@@ -1,7 +1,8 @@
 import puppeteer from 'puppeteer-core';
+import { resolveDramartTeamId } from './dramart-team.js';
 
 const BROWSER_URL = process.env.BROWSER_URL || 'http://127.0.0.1:42208';
-const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
+const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const TODAY = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
 const PROJECT_NAME = process.env.PROJECT_NAME || `${TODAY}-01`;
 
@@ -11,6 +12,7 @@ const page = pages.find((item) => item.url().includes('/dramart')) || pages.at(-
 
 await page.bringToFront();
 await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
 
 const result = await page.evaluate(
   async ({ teamId, today, projectName }) => {
@@ -64,7 +66,7 @@ const result = await page.evaluate(
       AspectRatio: '9:16',
       Resolution: '720p',
       Language: 'en',
-      VisualPromptId: '6a9658a204b6dbdd6d21ce84',
+      VisualPromptId: 'realistic_modern_urban',
       CreationMode: 'manual',
     });
 
@@ -94,7 +96,7 @@ const result = await page.evaluate(
       url: `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${teamId}`,
     };
   },
-  { teamId: TEAM_ID, today: TODAY, projectName: PROJECT_NAME },
+  { teamId, today: TODAY, projectName: PROJECT_NAME },
 );
 
 console.log('今日项目检查结果:', JSON.stringify(result, null, 2));

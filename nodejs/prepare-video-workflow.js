@@ -3,16 +3,19 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { resolveDramartTeamId } from './dramart-team.js';
 import { createVideoTempImages, materializeVideoImages } from './video-temp-images.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let activeBrowserURL = process.env.BROWSER_URL || '';
-const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
+const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECT_DATE = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
 const GENERATION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 15 * 60 * 1000);
 const IMAGE_UPLOAD_TIMEOUT_MS = Number(process.env.IMAGE_UPLOAD_TIMEOUT_MS || 2 * 60 * 1000);
 const SUBMIT_DELAY_MS = Number(process.env.SUBMIT_DELAY_MS || 3 * 1000);
 const TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
+const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
+const VIDEO_CONFIG_SUMMARY_PATTERN = '\\d+s\\s*\\|\\s*\\d+p\\s*\\|.*\\|\\s*(?:mp4|mov)';
 const TASK_ID = process.env.SEEDANCE_TASK_ID || `dramart-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${randomUUID().replace(/-/g, '').slice(0, 5)}`;
 const TASK_STARTED_AT = new Date().toLocaleString('zh-CN', { hour12: false });
 
@@ -139,7 +142,7 @@ async function resolveBrowserURL() {
   throw new Error('父服务提供的 BROWSER_URL 不可用，请重新启动 Seedance 任务服务');
 }
 
-export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, pageSize = 100, maxPages = 100, api } = {}) {
+export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, visualPromptId = 'realistic_modern_urban', pageSize = 100, maxPages = 100, api } = {}) {
       let post = api?.post;
       if (!post) {
       const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
@@ -223,7 +226,7 @@ export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, pag
         AspectRatio: ratio,
         Resolution: '720p',
         Language: 'en',
-        VisualPromptId: '6a9658a204b6dbdd6d21ce84',
+        VisualPromptId: visualPromptId,
         CreationMode: 'manual',
       });
 
@@ -255,10 +258,12 @@ async function ensureProjectForRatio(page, ratio) {
   await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
 
+  const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
   const result = await page.evaluate(ensureProjectForRatioApi, {
-    teamId: TEAM_ID,
+    teamId,
     projectDate: PROJECT_DATE,
     ratio,
+    visualPromptId: DEFAULT_VISUAL_PROMPT_ID,
   });
 
   console.log('比例项目检查结果:', result);
@@ -590,13 +595,18 @@ async function chooseCompactOption(page, value) {
   if (!ok) console.warn(`未能自动选择选项，可能页面当前已经是该值或控件未展开: ${text}`);
 }
 
+export function isVideoConfigSummaryText(text) {
+  return new RegExp(VIDEO_CONFIG_SUMMARY_PATTERN, 'i').test(String(text));
+}
+
 async function openVideoConfigPanel(page, root) {
-  const opened = await root.evaluate((container) => {
+  const opened = await root.evaluate((container, summaryPattern) => {
+    const summaryRegex = new RegExp(summaryPattern, 'i');
     const target = Array.from(container.querySelectorAll('button, span, div'))
       .filter((item) => {
         const text = (item.innerText || item.textContent || '').trim();
         const bounds = item.getBoundingClientRect();
-        return bounds.width > 0 && bounds.height > 0 && (text === '...' || /\d+s \| .* \| .*p \| mp4/.test(text));
+        return bounds.width > 0 && bounds.height > 0 && (text === '...' || summaryRegex.test(text));
       })
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
@@ -613,7 +623,7 @@ async function openVideoConfigPanel(page, root) {
     target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
     target.click();
     return true;
-  });
+  }, VIDEO_CONFIG_SUMMARY_PATTERN);
   if (!opened) {
     const rect = await root.evaluate((container) => {
       const bounds = container.getBoundingClientRect();
@@ -743,9 +753,10 @@ export function videoConfigMatches(summary, request) {
   const duration = summary?.duration ? `${Number(summary.duration)}s` : '';
   const resolution = String(summary?.resolution || '');
   const outputFormat = String(summary?.outputFormat || '').toLowerCase();
+  const hiddenDefaultResolution = request.image_type === 'image_to_video' && expected.resolution === '720p' && summary?.panel && !resolution;
   const hiddenDefaultFormat = request.image_type === 'image_to_video' && expected.outputFormat === 'mp4' && summary?.panel && !outputFormat;
   return (duration === expected.duration || compact.includes(expected.duration)) &&
-    (resolution === expected.resolution || compact.includes(expected.resolution)) &&
+    (resolution === expected.resolution || compact.includes(expected.resolution) || hiddenDefaultResolution) &&
     (outputFormat === expected.outputFormat || compact.toLowerCase().includes(expected.outputFormat) || hiddenDefaultFormat);
 }
 
@@ -842,7 +853,10 @@ export async function uploadImages(page, files, root, options = {}) {
     if (!/\/proxy\/api\/v1\/shot\/update(?:\?|$)/i.test(response.url())) return false;
     try {
       const body = JSON.parse(request.postData() || '{}');
-      return (body.Shot?.VideoMeta?.RefImages?.length || 0) >= files.length;
+      const videoMeta = body.Shot?.VideoMeta || {};
+      const keyFrameCount = Object.values(videoMeta.KeyFrameImages || {})
+        .filter((image) => image?.Key || image?.Url || image?.ArkAssetId).length;
+      return (videoMeta.RefImages?.length || 0) + keyFrameCount >= files.length;
     } catch {
       return false;
     }
@@ -1024,6 +1038,15 @@ async function waitForGenerationResult(page, taskEpisode) {
   };
 }
 
+export function summarizeVideoMetaInput(videoMeta = {}) {
+  const keyFrameImageCount = Object.values(videoMeta.KeyFrameImages || {})
+    .filter((image) => image?.Key || image?.Url || image?.ArkAssetId).length;
+  return {
+    prompt: videoMeta.Prompt || videoMeta.KeyFramePrompt || '',
+    imageCount: (videoMeta.RefImages?.length || 0) + keyFrameImageCount,
+  };
+}
+
 async function verifyCurrentTaskShot(page, taskEpisode, request) {
   const shotState = await page.evaluate(async ({ teamId, projectId, episodeId, shotId }) => {
     const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
@@ -1052,8 +1075,9 @@ async function verifyCurrentTaskShot(page, taskEpisode, request) {
     shotId: taskEpisode.ShotId,
   });
 
-  const prompt = shotState.shot?.VideoMeta?.Prompt || shotState.shot?.Meta?.Action || '';
-  const imageCount = shotState.shot?.VideoMeta?.RefImages?.length || 0;
+  const input = summarizeVideoMetaInput(shotState.shot?.VideoMeta);
+  const prompt = input.prompt || shotState.shot?.Meta?.Action || '';
+  const imageCount = input.imageCount;
   if (shotState.total !== 1) throw new Error(`任务集不是唯一分镜，当前 ${shotState.total} 个分镜`);
   if (!prompt.includes(request.prompt.slice(0, Math.min(30, request.prompt.length)))) {
     throw new Error(`本次任务分镜未写入目标提示词，ShotId=${taskEpisode.ShotId}`);

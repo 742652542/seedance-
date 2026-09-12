@@ -2,17 +2,19 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { resolveDramartTeamId } from './dramart-team.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_OPEN_API = process.env.BROWSER_OPEN_API || 'http://127.0.0.1:27997/api/v2/profile-open';
 const PROFILE_ID = Number(process.env.PROFILE_ID || 81372);
-const TEAM_ID = process.env.TEAM_ID || '6a90faa57906980889d712fd';
+const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECT_DATE = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
 const GENERATION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 15 * 60 * 1000);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 3000);
 const TEMP_DIR = path.join(__dirname, 'tmp-upload-images');
 const TASK_ID = process.env.SEEDANCE_TASK_ID || 'manual-image-task';
 const TASK_STARTED_AT = new Date().toLocaleString('zh-CN', { hour12: false });
+const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
 let activeBrowserURL = process.env.BROWSER_URL || '';
 
 const IMAGE_MODEL_MAP = {
@@ -55,7 +57,7 @@ function normalizeRequest(request) {
     ratio: request.ratio || request.aspect_ratio || request.ratios || '9:16',
     resolution: request.resolution || '1k',
     count: Math.max(1, Number(request.count || request.n || 1)),
-    styleId: request.style_id || request.styleId || '6a9658a204b6dbdd6d21ce84',
+    styleId: request.style_id || request.styleId || DEFAULT_VISUAL_PROMPT_ID,
     images,
   };
 }
@@ -244,9 +246,10 @@ async function ensureProjectForRatio(page, ratio) {
   console.log(`步骤: 打开项目列表，查找比例项目 ${ratio}`);
   await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
+  const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
   const projectName = `${PROJECT_DATE}-${ratio}`;
   const listResult = await pagePost(page, '/proxy/api/v1/project/list', {
-    TeamId: TEAM_ID,
+    TeamId: teamId,
     Filters: { CreationMode: 'agent,manual' },
     PageIndex: 1,
     PageSize: 100,
@@ -261,32 +264,32 @@ async function ensureProjectForRatio(page, ratio) {
       projectName,
       projectId: existing.ProjectId,
       scriptId: existing.ScriptId,
-      teamId: existing.TeamId || TEAM_ID,
-      url: `https://work.xiaomaomi.cn/dramart/project/${existing.ProjectId}/${existing.ScriptId}/${existing.TeamId || TEAM_ID}/canvas`,
+      teamId: existing.TeamId || teamId,
+      url: `https://work.xiaomaomi.cn/dramart/project/${existing.ProjectId}/${existing.ScriptId}/${existing.TeamId || teamId}/canvas`,
     };
   }
 
   console.log(`步骤: 创建比例项目 ${projectName}`);
   const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
-    TeamId: TEAM_ID,
+    TeamId: teamId,
     AspectRatio: ratio,
     Resolution: '720p',
     Language: 'en',
-    VisualPromptId: '6a9658a204b6dbdd6d21ce84',
+    VisualPromptId: DEFAULT_VISUAL_PROMPT_ID,
     CreationMode: 'manual',
   });
   const projectId = createResult.Result?.ProjectId;
   const scriptId = createResult.Result?.ScriptId;
   if (!projectId || !scriptId) throw new Error(`创建项目返回缺少 ID: ${JSON.stringify(createResult)}`);
-  await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: projectName, ProjectId: projectId, TeamId: TEAM_ID });
-  await pagePost(page, '/proxy/api/v1/project/update', { Status: 'resource_confirmed', ProjectId: projectId, TeamId: TEAM_ID });
+  await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: projectName, ProjectId: projectId, TeamId: teamId });
+  await pagePost(page, '/proxy/api/v1/project/update', { Status: 'resource_confirmed', ProjectId: projectId, TeamId: teamId });
   return {
     action: 'created',
     projectName,
     projectId,
     scriptId,
-    teamId: TEAM_ID,
-    url: `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${TEAM_ID}/canvas`,
+    teamId,
+    url: `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${teamId}/canvas`,
   };
 }
 
