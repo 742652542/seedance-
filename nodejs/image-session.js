@@ -2,9 +2,9 @@ import nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDramartTeamId } from './dramart-team.js';
+import { DEFAULT_VISUAL_PROMPT_ID, projectNameForStyle, resolveDramartVisualPromptId } from './dramart-style.js';
 
 const DEFAULT_TEMP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tmp-upload-images');
-const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
 const IMAGE_MODEL_MAP = {
   'Doubao-Seedream-5.0-Pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'doubao-seedream-5-0-pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
@@ -49,7 +49,11 @@ function imageTitle(item, index) {
   return item.title || item.name || item.description || `image-${index + 1}.png`;
 }
 
-function normalizeRequest(request) {
+function normalizeVisualPromptId(value) {
+  return String(value || '').trim() || DEFAULT_VISUAL_PROMPT_ID;
+}
+
+function normalizeRequest(request, defaultStyleId) {
   const model = resolveImageModel(request.model || 'ep-20260318144532-28ssz');
   return {
     ...request,
@@ -59,7 +63,7 @@ function normalizeRequest(request) {
     ratio: request.ratio || request.aspect_ratio || request.ratios || '9:16',
     resolution: request.resolution || '1k',
     count: Math.max(1, Number(request.count || request.n || 1)),
-    styleId: request.style_id || request.styleId || DEFAULT_VISUAL_PROMPT_ID,
+    styleId: normalizeVisualPromptId(request.style_id || request.styleId || defaultStyleId),
     images: Array.isArray(request.images) ? request.images : request.images ? [request.images] : [],
   };
 }
@@ -146,6 +150,8 @@ export function createImageSession(options = {}) {
   const configuredTeamId = options.teamId || process.env.TEAM_ID || '';
   const getTeamId = options.getTeamId || ((page) => resolveDramartTeamId(page, configuredTeamId));
   const getKnownTeamId = options.getKnownTeamId;
+  // An empty value deliberately means "discover from the currently logged-in team".
+  const configuredVisualPromptId = options.visualPromptId ?? process.env.DRAMART_VISUAL_PROMPT_ID ?? '';
   const tempRoot = options.tempRoot || DEFAULT_TEMP_ROOT;
   const pollIntervalMs = options.pollIntervalMs ?? 3000;
   const generationTimeoutMs = options.generationTimeoutMs ?? 15 * 60 * 1000;
@@ -192,24 +198,32 @@ export function createImageSession(options = {}) {
       await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
       const teamId = await getTeamId(page);
       if (!teamId) throw new Error('当前登录账号没有可用团队');
+      const resolvedStyle = await resolveDramartVisualPromptId({
+        teamId,
+        configuredVisualPromptId,
+        post: (requestPath, body) => pagePost(page, requestPath, body, requestTimeoutMs),
+        log,
+      });
+      const visualPromptId = resolvedStyle.styleId;
+      const projectName = projectNameForStyle('image', visualPromptId);
       const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
         TeamId: teamId,
         AspectRatio: '9:16',
         Resolution: '720p',
         Language: 'en',
-        VisualPromptId: DEFAULT_VISUAL_PROMPT_ID,
+        VisualPromptId: visualPromptId,
         CreationMode: 'manual',
       }, requestTimeoutMs);
       const projectId = createResult.Result?.ProjectId;
       const scriptId = createResult.Result?.ScriptId;
       if (!projectId || !scriptId) throw new Error(`创建 image 项目返回缺少 ID: ${JSON.stringify(createResult)}`);
-      await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: 'image', ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
+      await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: projectName, ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
       await pagePost(page, '/proxy/api/v1/project/update', { Status: 'resource_confirmed', ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
       const url = `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${teamId}/canvas`;
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
       generation += 1;
-      const initialized = { browser, page, projectName: 'image', projectId, scriptId, teamId, url, generation };
+      const initialized = { browser, page, projectName, projectId, scriptId, teamId, url, visualPromptId, generation };
       initialized.onDisconnected = () => invalidate(initialized.generation);
       initialized.onPageReady = (frame) => {
         if (state !== initialized) return;
@@ -330,8 +344,6 @@ export function createImageSession(options = {}) {
   }
 
   async function runTask(taskId, rawRequest, taskOptions = {}) {
-    const request = normalizeRequest(rawRequest);
-    const generationDetail = `${request.modelName} · ${request.ratio} · ${request.count} 张`;
     await notify(taskOptions.onProgress, { code: 'preparing_session', stage: '准备生图会话', detail: '' }, 'progress_callback');
     const taskDir = path.join(tempRoot, String(taskId).replace(/[^a-zA-Z0-9._-]/g, '_'));
     await fs.mkdir(taskDir, { recursive: true });
@@ -340,6 +352,8 @@ export function createImageSession(options = {}) {
     let submitted = false;
     try {
       sessionState = await ensureReady();
+      const request = normalizeRequest(rawRequest, sessionState.visualPromptId);
+      const generationDetail = `${request.modelName} · ${request.ratio} · ${request.count} 张`;
       await taskOptions.onReady?.(sessionState);
       await notify(taskOptions.onProgress, {
         code: 'uploading_references',

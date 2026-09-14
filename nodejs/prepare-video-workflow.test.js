@@ -328,6 +328,34 @@ test('project on the second page is reused without calling create', async () => 
   assert.deepEqual(calls.map((call) => call.body.PageIndex), [1, 2]);
 });
 
+test('custom project style uses an isolated stable name and never reuses the legacy default-style project', async () => {
+  const calls = [];
+  const result = await ensureProjectForRatioApi({
+    teamId: 'team-1',
+    projectDate: '2026-09-10',
+    ratio: '16:9',
+    visualPromptId: 'account-custom-style',
+    api: {
+      post: async (requestPath, body) => {
+        calls.push({ requestPath, body });
+        if (requestPath === '/proxy/api/v1/project/list') {
+          return { Result: { Items: [project({ ProjectName: '2026-09-10-16:9' })] } };
+        }
+        if (requestPath === '/proxy/api/v1/project/create') return { Result: { ProjectId: 'custom-project', ScriptId: 'custom-script' } };
+        if (requestPath === '/proxy/api/v1/project/update') return { Result: { Status: 'resource_confirmed' } };
+        throw new Error(`unexpected API call: ${requestPath}`);
+      },
+    },
+  });
+
+  assert.equal(result.action, 'created');
+  assert.match(result.projectName, /^2026-09-10-16:9-style-account-custom-style-/);
+  const create = calls.find((call) => call.requestPath === '/proxy/api/v1/project/create');
+  assert.equal(create.body.VisualPromptId, 'account-custom-style');
+  const rename = calls.find((call) => call.requestPath === '/proxy/api/v1/project/update' && call.body.ProjectName);
+  assert.equal(rename.body.ProjectName, result.projectName);
+});
+
 test('project pagination follows a known total even when each page is shorter than requested', async () => {
   const calls = [];
   const projectName = '2026-09-10-4:3';

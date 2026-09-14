@@ -45,6 +45,9 @@ function createHarness(options = {}) {
   const statuses = new Map();
 
   const handler = options.handler || (async (requestPath, body) => {
+    if (requestPath === '/proxy/api/v1/custom_visual_style/list') {
+      return { Result: { Items: [] } };
+    }
     if (requestPath === '/proxy/api/v1/project/create') {
       projectSequence += 1;
       return { Result: { ProjectId: `project-${projectSequence}`, ScriptId: `script-${projectSequence}` } };
@@ -160,6 +163,8 @@ async function withSession(harness, callback, options = {}) {
     pollIntervalMs: 0,
     generationTimeoutMs: 1000,
     timers: { now: Date.now, sleep: async () => {} },
+    // Existing session tests focus on upload/poll behavior; style discovery has dedicated coverage below.
+    visualPromptId: 'realistic_modern_urban',
     ...options,
   });
   try {
@@ -243,6 +248,65 @@ test('tasks submit concurrently with independent requested ratios', async () => 
     firstListGate.resolve();
     await Promise.all([first, second]);
   });
+});
+
+test('custom session style configures its project and is the generation default, while a task override wins', async () => {
+  const harness = createHarness();
+  await withSession(harness, async (session) => {
+    await Promise.all([
+      session.runTask('task-default-style', task()),
+      session.runTask('task-override-style', task({ style_id: 'one-off-style' })),
+    ]);
+
+    const create = harness.calls.find((call) => call.path === '/proxy/api/v1/project/create');
+    assert.equal(create.body.VisualPromptId, 'account-custom-style');
+    const rename = harness.calls.find((call) => call.path === '/proxy/api/v1/project/update' && call.body.ProjectName);
+    assert.match(rename.body.ProjectName, /^image-style-account-custom-style-/);
+    const submissions = harness.calls.filter((call) => call.path === '/proxy/api/v1/tasks/image/generate');
+    assert.deepEqual(submissions.map((call) => call.body.ParsedPrompt.StyleId).sort(), ['account-custom-style', 'one-off-style']);
+  }, { visualPromptId: 'account-custom-style' });
+});
+
+test('image session resolves the current team custom style before project creation and uses it as the generation default', async () => {
+  const harness = createHarness({
+    handler: async (requestPath, body) => {
+      if (requestPath === '/proxy/api/v1/custom_visual_style/list') {
+        assert.deepEqual(body, { TeamId: 'team-current', Filters: { Display: true, Category: 'custom' }, PageIndex: 1, PageSize: 100 });
+        return { Result: { Items: [{ StyleId: 'team-style', StyleName: '新账号风格', Display: true, Category: 'custom' }] } };
+      }
+      if (requestPath === '/proxy/api/v1/project/create') return { Result: { ProjectId: 'project-style', ScriptId: 'script-style' } };
+      if (requestPath === '/proxy/api/v1/file/upload') return { Result: { UploadInfos: [{ Url: 'https://upload.test/image', TosKey: 'style-key' }] } };
+      if (requestPath === '/proxy/api/v1/image/add' && body.SourceType === 'custom') return { Result: { ImageId: 'reference-style' } };
+      if (requestPath === '/proxy/api/v1/image/add') return { Result: { ImageId: 'resource-style' } };
+      if (requestPath === '/proxy/api/v1/tasks/image/list') return { Result: { Items: [{ ResourceId: 'resource-style', Status: 'done', GeneratedResource: { ImagesInfo: [] } }] } };
+      return { Result: {} };
+    },
+  });
+  await withSession(harness, async (session) => {
+    await session.runTask('task-auto-style', task());
+    const paths = harness.calls.map((call) => call.path);
+    assert.ok(paths.indexOf('/proxy/api/v1/custom_visual_style/list') < paths.indexOf('/proxy/api/v1/project/create'));
+    assert.equal(harness.calls.find((call) => call.path === '/proxy/api/v1/project/create').body.VisualPromptId, 'team-style');
+    assert.equal(harness.calls.find((call) => call.path === '/proxy/api/v1/tasks/image/generate').body.ParsedPrompt.StyleId, 'team-style');
+  }, { visualPromptId: '' });
+});
+
+test('ambiguous current-team styles fail before an image project is created', async () => {
+  const harness = createHarness({
+    handler: async (requestPath) => {
+      if (requestPath === '/proxy/api/v1/custom_visual_style/list') {
+        return { Result: { Items: [
+          { StyleId: 'team-style-a', StyleName: '风格 A', Display: true, Category: 'custom' },
+          { StyleId: 'team-style-b', StyleName: '风格 B', Display: true, Category: 'custom' },
+        ] } };
+      }
+      throw new Error(`unexpected request: ${requestPath}`);
+    },
+  });
+  await withSession(harness, async (session) => {
+    await assert.rejects(session.ensureReady(), /DRAMART_VISUAL_PROMPT_ID/);
+    assert.equal(harness.calls.some((call) => call.path === '/proxy/api/v1/project/create'), false);
+  }, { visualPromptId: '' });
 });
 
 test('concurrent polling stays isolated by each generated resourceId', async () => {

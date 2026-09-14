@@ -48,6 +48,7 @@ const IMAGE_MODELS = new Set([
   'doubao-seedream-4-5',
 ]);
 const DEFAULT_IMAGE_MODEL = 'ep-20260709194802-qsvc2';
+const SERVICE_VISUAL_PROMPT_ID = String(process.env.DRAMART_VISUAL_PROMPT_ID || '').trim();
 const VIDEO_PREPARATION_TIMEOUT_MS = Number(process.env.VIDEO_PREPARATION_TIMEOUT_MS || 5 * 60 * 1000);
 const FIXED_VIEWPORT = { width: 1920, height: 920 };
 
@@ -432,6 +433,7 @@ const imageSession = createImageSessionWithStatusPanel(imageTaskStatusPanel, { s
   fs,
   generationTimeoutMs: Number(process.env.GENERATION_TIMEOUT_MS || 15 * 60 * 1000),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 3000),
+  visualPromptId: SERVICE_VISUAL_PROMPT_ID,
   log: debugLog,
 } });
 

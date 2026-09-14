@@ -143,7 +143,10 @@ doubao-seedance-2-0-mini-260615
 PORT=3000
 NO_OPEN=1
 ARK_API_KEY=通用 API Key
+DRAMART_VISUAL_PROMPT_ID=当前 Dramart 账号可用的风格 ID
 ```
+
+`DRAMART_VISUAL_PROMPT_ID` 同时用于新建视频项目和共享生图项目，且优先级最高：设置后会直接使用该 ID，不读取风格库。未设置时，服务会在当前已登录团队中分页读取可见的 `custom` 风格：恰好一个则自动使用；没有则记录日志并兼容回退到 `realistic_modern_urban`；多个则在创建项目前失败，并列出候选名称/ID，要求你显式设置此变量。接口或返回结构异常也会安全失败，不会猜测风格。切换 Dramart 账号后，不要复用其他账号的 ID。请求中的 `style_id`/`styleId` 可对单次任务覆盖服务自动风格；自定义风格的项目名称会带稳定的风格标识，避免与旧默认风格项目混用。
 
 也支持按模型配置环境变量，例如：
 

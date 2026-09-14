@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { resolveDramartTeamId } from './dramart-team.js';
+import { resolveDramartVisualPromptId } from './dramart-style.js';
 import { createVideoTempImages, materializeVideoImages } from './video-temp-images.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,7 @@ const GENERATION_TIMEOUT_MS = Number(process.env.GENERATION_TIMEOUT_MS || 15 * 6
 const IMAGE_UPLOAD_TIMEOUT_MS = Number(process.env.IMAGE_UPLOAD_TIMEOUT_MS || 2 * 60 * 1000);
 const SUBMIT_DELAY_MS = Number(process.env.SUBMIT_DELAY_MS || 3 * 1000);
 const TEMP_ROOT = path.join(__dirname, 'tmp-upload-images');
-const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
+const SERVICE_VISUAL_PROMPT_ID = String(process.env.DRAMART_VISUAL_PROMPT_ID || '').trim();
 const VIDEO_CONFIG_SUMMARY_PATTERN = '\\d+s\\s*\\|\\s*\\d+p\\s*\\|.*\\|\\s*(?:mp4|mov)';
 const TASK_ID = process.env.SEEDANCE_TASK_ID || `dramart-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}-${randomUUID().replace(/-/g, '').slice(0, 5)}`;
 const TASK_STARTED_AT = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -52,6 +53,8 @@ function normalizeRequest(request) {
     ratio: request.ratio || '16:9',
     duration: Number(request.duration || 5),
     output_format: String(request.output_format || 'mp4').toLowerCase(),
+    // Empty means that ensureProjectForRatio will discover this team's sole custom style.
+    styleId: String(request.style_id || request.styleId || SERVICE_VISUAL_PROMPT_ID).trim(),
     image_type: imageType,
     images,
   };
@@ -143,6 +146,20 @@ async function resolveBrowserURL() {
 }
 
 export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, visualPromptId = 'realistic_modern_urban', pageSize = 100, maxPages = 100, api } = {}) {
+      const defaultVisualPromptId = 'realistic_modern_urban';
+      visualPromptId = String(visualPromptId || '').trim() || defaultVisualPromptId;
+      const projectNameForStyle = (baseName, styleId) => {
+        if (styleId === defaultVisualPromptId) return baseName;
+        let hash = 2166136261;
+        for (const character of styleId) {
+          hash ^= character.codePointAt(0);
+          hash = Math.imul(hash, 16777619);
+        }
+        const safe = Array.from(styleId, (character) => (
+          /^[a-zA-Z0-9._-]$/.test(character) ? character : `_${character.codePointAt(0).toString(16)}_`
+        )).join('').slice(0, 56);
+        return `${baseName}-style-${safe || 'custom'}-${(hash >>> 0).toString(36)}`;
+      };
       let post = api?.post;
       if (!post) {
       const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
@@ -162,7 +179,7 @@ export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, vis
       };
       }
 
-      const projectName = `${projectDate}-${ratio}`;
+      const projectName = projectNameForStyle(`${projectDate}-${ratio}`, visualPromptId);
       const projects = [];
       const seen = new Set();
       let knownTotal = null;
@@ -204,7 +221,11 @@ export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, vis
         Date.parse(item?.UpdatedAt || '') || 0,
       );
       const existing = projects
-        .filter((project) => (project.ProjectName ?? project.projectName) === projectName)
+        .filter((project) => {
+          if ((project.ProjectName ?? project.projectName) !== projectName) return false;
+          const listedStyleId = project.VisualPromptId ?? project.visualPromptId ?? project.StyleId ?? project.styleId;
+          return listedStyleId == null || String(listedStyleId) === visualPromptId;
+        })
         .sort((a, b) => itemTime(b) - itemTime(a))[0];
 
       if (existing) {
@@ -254,16 +275,44 @@ export async function ensureProjectForRatioApi({ teamId, projectDate, ratio, vis
       };
 }
 
-async function ensureProjectForRatio(page, ratio) {
+async function pagePost(page, requestPath, body) {
+  return page.evaluate(
+    async ({ requestPath: path, body: requestBody }) => {
+      const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
+      const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
+      if (!token) throw new Error('localStorage 中没有 DRAMART_AUTH_TOKEN，请先登录');
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json', Authorization: token,
+          'X-Vsd-Auth-Token': token, 'X-Vsd-Refresh-Token': refreshToken || '',
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(`${path} HTTP ${response.status}: ${JSON.stringify(data)}`);
+      return data;
+    },
+    { requestPath, body },
+  );
+}
+
+async function ensureProjectForRatio(page, ratio, requestedVisualPromptId = SERVICE_VISUAL_PROMPT_ID) {
   await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
 
   const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
+  const resolvedStyle = await resolveDramartVisualPromptId({
+    teamId,
+    configuredVisualPromptId: requestedVisualPromptId,
+    post: (requestPath, body) => pagePost(page, requestPath, body),
+    log: console.log,
+  });
   const result = await page.evaluate(ensureProjectForRatioApi, {
     teamId,
     projectDate: PROJECT_DATE,
     ratio,
-    visualPromptId: DEFAULT_VISUAL_PROMPT_ID,
+    visualPromptId: resolvedStyle.styleId,
   });
 
   console.log('比例项目检查结果:', result);
@@ -1178,7 +1227,7 @@ export async function prepareVideoTask({
   emitTaskStarted = (payload) => console.log('TASK_STARTED', JSON.stringify(payload)),
   materialize,
 }) {
-  const project = await ensureProject(page, request.ratio);
+  const project = await ensureProject(page, request.ratio, request.styleId);
   await updateStatus(page, '项目准备完成', project.projectName || project.url);
   const taskEpisode = await createEpisode(page);
   await updateStatus(page, '已创建任务分镜', `ShotId: ${taskEpisode.ShotId}`);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { resolveDramartTeamId } from './dramart-team.js';
+import { projectNameForStyle, resolveDramartVisualPromptId } from './dramart-style.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_OPEN_API = process.env.BROWSER_OPEN_API || 'http://127.0.0.1:27997/api/v2/profile-open';
@@ -14,7 +15,7 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 3000);
 const TEMP_DIR = path.join(__dirname, 'tmp-upload-images');
 const TASK_ID = process.env.SEEDANCE_TASK_ID || 'manual-image-task';
 const TASK_STARTED_AT = new Date().toLocaleString('zh-CN', { hour12: false });
-const DEFAULT_VISUAL_PROMPT_ID = 'realistic_modern_urban';
+const SERVICE_VISUAL_PROMPT_ID = String(process.env.DRAMART_VISUAL_PROMPT_ID || '').trim();
 let activeBrowserURL = process.env.BROWSER_URL || '';
 
 const IMAGE_MODEL_MAP = {
@@ -57,7 +58,7 @@ function normalizeRequest(request) {
     ratio: request.ratio || request.aspect_ratio || request.ratios || '9:16',
     resolution: request.resolution || '1k',
     count: Math.max(1, Number(request.count || request.n || 1)),
-    styleId: request.style_id || request.styleId || DEFAULT_VISUAL_PROMPT_ID,
+    styleId: String(request.style_id || request.styleId || SERVICE_VISUAL_PROMPT_ID).trim(),
     images,
   };
 }
@@ -242,12 +243,19 @@ async function pagePost(page, requestPath, body) {
   );
 }
 
-async function ensureProjectForRatio(page, ratio) {
+async function ensureProjectForRatio(page, ratio, requestedVisualPromptId = SERVICE_VISUAL_PROMPT_ID) {
   console.log(`步骤: 打开项目列表，查找比例项目 ${ratio}`);
   await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});
   const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
-  const projectName = `${PROJECT_DATE}-${ratio}`;
+  const resolvedStyle = await resolveDramartVisualPromptId({
+    teamId,
+    configuredVisualPromptId: requestedVisualPromptId,
+    post: (requestPath, body) => pagePost(page, requestPath, body),
+    log: console.log,
+  });
+  const visualPromptId = resolvedStyle.styleId;
+  const projectName = projectNameForStyle(`${PROJECT_DATE}-${ratio}`, visualPromptId);
   const listResult = await pagePost(page, '/proxy/api/v1/project/list', {
     TeamId: teamId,
     Filters: { CreationMode: 'agent,manual' },
@@ -275,7 +283,7 @@ async function ensureProjectForRatio(page, ratio) {
     AspectRatio: ratio,
     Resolution: '720p',
     Language: 'en',
-    VisualPromptId: DEFAULT_VISUAL_PROMPT_ID,
+    VisualPromptId: visualPromptId,
     CreationMode: 'manual',
   });
   const projectId = createResult.Result?.ProjectId;
@@ -413,7 +421,7 @@ async function main() {
   try {
     await updateTaskStatus(page, '正在初始化任务', `${request.modelName} · ${request.ratio} · ${request.count} 张`);
     await setViewportToWindow(page);
-    const project = await ensureProjectForRatio(page, request.ratio);
+    const project = await ensureProjectForRatio(page, request.ratio, request.styleId);
     console.log(`步骤: 打开画布 ${project.url}`);
     await page.goto(project.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});

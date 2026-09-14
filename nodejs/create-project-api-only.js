@@ -1,9 +1,26 @@
 import puppeteer from 'puppeteer-core';
 import { resolveDramartTeamId } from './dramart-team.js';
+import { resolveDramartVisualPromptId } from './dramart-style.js';
 
 const BROWSER_URL = process.env.BROWSER_URL || 'http://127.0.0.1:42208';
 const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECT_NAME = process.env.PROJECT_NAME || `${new Date().toLocaleDateString('en-CA')}-api-only`;
+const VISUAL_PROMPT_ID = String(process.env.DRAMART_VISUAL_PROMPT_ID || '').trim();
+
+async function pagePost(page, requestPath, body) {
+  return page.evaluate(async ({ requestPath: path, body: requestBody }) => {
+    const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
+    const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
+    if (!token) throw new Error('localStorage 中没有 DRAMART_AUTH_TOKEN，请先登录');
+    const response = await fetch(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', Authorization: token, 'X-Vsd-Auth-Token': token, 'X-Vsd-Refresh-Token': refreshToken || '' },
+      body: JSON.stringify(requestBody),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(`${path} HTTP ${response.status}: ${JSON.stringify(data)}`);
+    return data;
+  }, { requestPath, body });
+}
 
 const browser = await puppeteer.connect({ browserURL: BROWSER_URL });
 const pages = await browser.pages();
@@ -12,9 +29,12 @@ const page = pages.find((item) => item.url().includes('/dramart')) || pages.at(-
 await page.bringToFront();
 await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
+const visualPromptId = (await resolveDramartVisualPromptId({
+  teamId, configuredVisualPromptId: VISUAL_PROMPT_ID, post: (requestPath, body) => pagePost(page, requestPath, body), log: console.log,
+})).styleId;
 
 const result = await page.evaluate(
-  async ({ teamId, projectName }) => {
+  async ({ teamId, projectName, visualPromptId }) => {
     const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
     const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
     if (!token) throw new Error('localStorage 中没有 DRAMART_AUTH_TOKEN，请先登录');
@@ -40,7 +60,7 @@ const result = await page.evaluate(
       AspectRatio: '9:16',
       Resolution: '720p',
       Language: 'en',
-      VisualPromptId: 'realistic_modern_urban',
+      VisualPromptId: visualPromptId,
       CreationMode: 'manual',
     });
 
@@ -71,7 +91,7 @@ const result = await page.evaluate(
       confirmStatus: confirmResult.Result?.Status,
     };
   },
-  { teamId, projectName: PROJECT_NAME },
+  { teamId, projectName: PROJECT_NAME, visualPromptId },
 );
 
 console.log('API 创建结果:', JSON.stringify(result, null, 2));

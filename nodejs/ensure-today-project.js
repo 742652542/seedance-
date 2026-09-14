@@ -1,10 +1,26 @@
 import puppeteer from 'puppeteer-core';
 import { resolveDramartTeamId } from './dramart-team.js';
+import { projectNameForStyle, resolveDramartVisualPromptId } from './dramart-style.js';
 
 const BROWSER_URL = process.env.BROWSER_URL || 'http://127.0.0.1:42208';
 const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const TODAY = process.env.PROJECT_DATE || new Date().toLocaleDateString('en-CA');
-const PROJECT_NAME = process.env.PROJECT_NAME || `${TODAY}-01`;
+const VISUAL_PROMPT_ID = String(process.env.DRAMART_VISUAL_PROMPT_ID || '').trim();
+
+async function pagePost(page, requestPath, body) {
+  return page.evaluate(async ({ requestPath: path, body: requestBody }) => {
+    const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
+    const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
+    if (!token) throw new Error('localStorage 中没有 DRAMART_AUTH_TOKEN，请先登录');
+    const response = await fetch(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', Authorization: token, 'X-Vsd-Auth-Token': token, 'X-Vsd-Refresh-Token': refreshToken || '' },
+      body: JSON.stringify(requestBody),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(`${path} HTTP ${response.status}: ${JSON.stringify(data)}`);
+    return data;
+  }, { requestPath, body });
+}
 
 const browser = await puppeteer.connect({ browserURL: BROWSER_URL });
 const pages = await browser.pages();
@@ -13,9 +29,13 @@ const page = pages.find((item) => item.url().includes('/dramart')) || pages.at(-
 await page.bringToFront();
 await page.goto('https://work.xiaomaomi.cn/dramart/projectlist/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 const teamId = await resolveDramartTeamId(page, CONFIGURED_TEAM_ID);
+const visualPromptId = (await resolveDramartVisualPromptId({
+  teamId, configuredVisualPromptId: VISUAL_PROMPT_ID, post: (requestPath, body) => pagePost(page, requestPath, body), log: console.log,
+})).styleId;
+const projectName = process.env.PROJECT_NAME || projectNameForStyle(`${TODAY}-01`, visualPromptId);
 
 const result = await page.evaluate(
-  async ({ teamId, today, projectName }) => {
+  async ({ teamId, projectName, visualPromptId }) => {
     const token = localStorage.getItem('DRAMART_AUTH_TOKEN');
     const refreshToken = localStorage.getItem('DRAMART_REFRESH_TOKEN');
     if (!token) throw new Error('localStorage 中没有 DRAMART_AUTH_TOKEN，请先登录');
@@ -44,11 +64,11 @@ const result = await page.evaluate(
     });
 
     const projects = listResult.Result?.Items || [];
-    const todayProjects = projects
-      .filter((project) => project.ProjectName === today || project.ProjectName?.startsWith(`${today}-`))
+    const matchingProjects = projects
+      .filter((project) => project.ProjectName === projectName)
       .sort((a, b) => new Date(b.CreatedAt || b.UpdatedAt) - new Date(a.CreatedAt || a.UpdatedAt));
 
-    const existing = todayProjects[0];
+    const existing = matchingProjects[0];
     if (existing) {
       return {
         action: 'exists',
@@ -66,7 +86,7 @@ const result = await page.evaluate(
       AspectRatio: '9:16',
       Resolution: '720p',
       Language: 'en',
-      VisualPromptId: 'realistic_modern_urban',
+      VisualPromptId: visualPromptId,
       CreationMode: 'manual',
     });
 
@@ -96,7 +116,7 @@ const result = await page.evaluate(
       url: `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${teamId}`,
     };
   },
-  { teamId, today: TODAY, projectName: PROJECT_NAME },
+  { teamId, projectName, visualPromptId },
 );
 
 console.log('今日项目检查结果:', JSON.stringify(result, null, 2));

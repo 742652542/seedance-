@@ -117,6 +117,8 @@ Content-Type: application/json
 | `generate_audio` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `watermark` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `camera_fixed` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
+| `style_id` | string | 否 | 当前团队自动识别的唯一自定义风格 | 本次视频项目使用的 Dramart 风格 ID，优先于服务自动识别；会使用独立项目名避免复用其他风格 |
+| `styleId` | string | 否 | 无 | `style_id` 的别名 |
 | `wait_for_completion` | boolean | 否 | `false` | 是否让 `/api/ask` 等待任务执行完毕 |
 | `advancedJson` | string | 否 | 无 | JSON 字符串，解析后覆盖同名字段 |
 | `advanced_json` | string | 否 | 无 | `advancedJson` 的别名 |
@@ -218,11 +220,13 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 | `resolution` | string | 否 | `720p` | 图片生成分辨率 |
 | `count` | number | 否 | `1` | 生成数量，最小为 1 |
 | `n` | number | 否 | 无 | `count` 的别名 |
-| `style_id` | string | 否 | 内置风格 ID | 风格 ID |
+| `style_id` | string | 否 | 共享生图项目自动识别的风格 | 本次生成的风格 ID；未传时与共享生图项目的风格一致 |
 | `styleId` | string | 否 | 无 | `style_id` 的别名 |
 | `wait_for_completion` | boolean | 否 | `false` | 是否让 `/api/ask` 等待任务执行完毕 |
 
-生图任务必须包含至少一张参考图片。当前实现不支持纯文本无参考图生图。上述 `ratio: 16:9` 和 `resolution: 720p` 是 `task-server` 对请求的默认标准化值；共享 `image` 项目创建时仍使用固定项目比例 `9:16`，该项目级参数不会覆盖请求的图片生成比例。
+生图任务必须包含至少一张参考图片。当前实现不支持纯文本无参考图生图。上述 `ratio: 16:9` 和 `resolution: 720p` 是 `task-server` 对请求的默认标准化值；共享 `image` 项目创建时仍使用固定项目比例 `9:16`，该项目级参数不会覆盖请求的图片生成比例。创建会话会在已登录且解析到 TeamId 后读取当前团队可见 `custom` 风格：一个则自动采用，零个才回退到 `realistic_modern_urban`，多个或接口异常会在创建项目前失败。`DRAMART_VISUAL_PROMPT_ID` 非空时始终跳过读取并强制采用；单个请求显式提供 `style_id` 时只覆盖该次生成的 `ParsedPrompt.StyleId`，不会重建共享会话。
+
+切换账号后，只有在该团队有多个可见自定义风格、且需要固定选择其中一个时，才配置该账号实际提供的 `DRAMART_VISUAL_PROMPT_ID` 并重启服务。若风格库显示自定义风格数量为 0，服务会安全回退，不能复用旧账号的风格 ID。
 
 ### 3.8 支持的生图模型
 
