@@ -838,41 +838,76 @@ async function clickVideoConfigButton(page, text) {
 }
 
 async function readVideoConfigSummary(page) {
-  return page.evaluate(() => {
-    const panel = Array.from(document.querySelectorAll('div'))
-      .filter((item) => {
-        const text = (item.innerText || item.textContent || '').trim();
-        const bounds = item.getBoundingClientRect();
-        const hasControl = item.querySelector('input[aria-label="视频时长"]') ||
-          Array.from(item.querySelectorAll('button')).some((button) => /^(?:\d+s|480p|720p|1080p|4k|mp4|mov)$/.test((button.innerText || button.textContent || '').trim()));
-        return bounds.width > 0 && bounds.height > 0 && text.includes('视频时长') && hasControl;
-      })
-      .sort((a, b) => {
-        const ar = a.getBoundingClientRect();
-        const br = b.getBoundingClientRect();
-        return ar.width * ar.height - br.width * br.height;
-      })[0];
-    const compact = Array.from(document.querySelectorAll('button, span, div'))
-      .map((item) => (item.innerText || item.textContent || '').trim())
-      .find((text) => /\d+s \| \d+个 \| \d+p \| mp4/.test(text));
-    const durationInput = panel?.querySelector('input[aria-label="视频时长"]') ||
-      Array.from(panel?.querySelectorAll('input') || []).find((input) => input.type !== 'range');
-    const selectedButton = (values) => Array.from(panel?.querySelectorAll('button') || [])
-      .filter((button) => values.includes((button.innerText || button.textContent || '').trim()))
-      .find((button) => {
-        const style = getComputedStyle(button);
-        return Number.parseInt(style.fontWeight, 10) >= 600;
-      });
-    const selectedDuration = selectedButton(Array.from({ length: 61 }, (_, index) => `${index}s`));
-    return {
-      panel: Boolean(panel),
-      compact: compact || '',
-      duration: durationInput?.value || (selectedDuration?.innerText || '').trim().replace(/s$/, ''),
-      resolution: (selectedButton(['480p', '720p', '1080p', '4k'])?.innerText || '').trim(),
-      outputFormat: (selectedButton(['mp4', 'mov'])?.innerText || '').trim().toLowerCase(),
-      panelText: panel ? (panel.innerText || panel.textContent || '').trim() : '',
+  const snapshot = await page.evaluate(() => {
+    const visible = (element) => {
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return bounds.width > 0 && bounds.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
     };
+    const option = (element) => {
+      const text = (element.innerText || element.textContent || '').trim();
+      const parents = [element, element.parentElement, element.parentElement?.parentElement].filter(Boolean);
+      const classes = parents.map((item) => item.className || '').join(' ');
+      const attrs = parents.map((item) => [
+        item.getAttribute('aria-checked'), item.getAttribute('aria-selected'), item.getAttribute('data-state'), item.getAttribute('data-checked'),
+      ].join(' ')).join(' ');
+      let selectedScore = 0;
+      if (/\btrue\b|\bchecked\b|\bselected\b/i.test(attrs)) selectedScore += 100;
+      if (/(?:^|[\s_-])(?:is-)?(?:checked|selected|active)(?:$|[\s_-])/i.test(classes)) selectedScore += 50;
+      if (/arco-(?:btn|radio)-primary|arco-radio-checked/i.test(classes)) selectedScore += 25;
+      if (Number.parseInt(getComputedStyle(element).fontWeight, 10) >= 600) selectedScore += 1;
+      return { value: text, selectedScore };
+    };
+    const durationValues = Array.from({ length: 61 }, (_, index) => `${index}s`);
+    const resolutionValues = ['480p', '720p', '1080p', '4k'];
+    const outputValues = ['mp4', 'mov'];
+    const panels = Array.from(document.querySelectorAll('div'))
+      .filter(visible)
+      .map((element) => {
+        const controls = Array.from(element.querySelectorAll('button, [role="radio"], label')).filter(visible).map(option);
+        const durationInput = element.querySelector('input[aria-label="视频时长"]') ||
+          Array.from(element.querySelectorAll('input')).find((input) => input.type !== 'range' && visible(input));
+        const bounds = element.getBoundingClientRect();
+        return {
+          text: (element.innerText || element.textContent || '').trim(),
+          area: bounds.width * bounds.height,
+          duration: durationInput?.value || '',
+          durationOptions: controls.filter((item) => durationValues.includes(item.value)),
+          resolutionOptions: controls.filter((item) => resolutionValues.includes(item.value)),
+          outputFormatOptions: controls.filter((item) => outputValues.includes(item.value)),
+        };
+      })
+      // Do not choose a child row: the config panel must contain all three visible rows.
+      .filter((panel) => (panel.duration || panel.durationOptions.length > 0) && panel.resolutionOptions.length > 0 && panel.outputFormatOptions.length > 0);
+    const summaryRegex = /\d+s\s*\|\s*\d+p\s*\|.*\|\s*(?:mp4|mov)/i;
+    const compact = Array.from(document.querySelectorAll('button, span, div'))
+      .map((element) => (element.innerText || element.textContent || '').trim())
+      .find((text) => summaryRegex.test(text)) || '';
+    return { panels, compact };
   });
+  return summarizeVideoConfigPanelSnapshot(snapshot || {});
+}
+
+function selectedPanelOption(options) {
+  const highest = Math.max(0, ...options.map((option) => Number(option.selectedScore) || 0));
+  if (!highest) return '';
+  const selected = options.filter((option) => (Number(option.selectedScore) || 0) === highest);
+  return selected.length === 1 ? selected[0].value : '';
+}
+
+export function summarizeVideoConfigPanelSnapshot(snapshot = {}) {
+  const panel = (snapshot.panels || [])
+    .filter((candidate) => (candidate.duration || candidate.durationOptions?.length) && candidate.resolutionOptions?.length && candidate.outputFormatOptions?.length)
+    .sort((left, right) => Number(left.area) - Number(right.area))[0];
+  if (!panel) return { panel: false, compact: String(snapshot.compact || ''), duration: '', resolution: '', outputFormat: '', panelText: '' };
+  return {
+    panel: true,
+    compact: String(snapshot.compact || ''),
+    duration: String(panel.duration || selectedPanelOption(panel.durationOptions)).replace(/s$/, ''),
+    resolution: selectedPanelOption(panel.resolutionOptions),
+    outputFormat: selectedPanelOption(panel.outputFormatOptions).toLowerCase(),
+    panelText: String(panel.text || ''),
+  };
 }
 
 export async function uploadImages(page, files, root, options = {}) {

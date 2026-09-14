@@ -11,6 +11,7 @@ import {
   runVideoWorkflow,
   setVideoOptionsOnce,
   summarizeVideoMetaInput,
+  summarizeVideoConfigPanelSnapshot,
   uploadImages,
   videoConfigMatches,
 } from './prepare-video-workflow.js';
@@ -271,6 +272,53 @@ test('image-to-video accepts hidden default resolution and format controls', () 
 
   assert.equal(videoConfigMatches(summary, request), true);
   assert.equal(videoConfigMatches(summary, { ...request, image_type: 'reference_image' }), false);
+});
+
+test('video config summary selects the smallest visible panel that contains every config row', () => {
+  const summary = summarizeVideoConfigPanelSnapshot({
+    compact: '5s | 480p | 1个 | mp4',
+    panels: [
+      // This is the actual popover fixture: duration, quantity, resolution, and format rows coexist.
+      {
+        area: 400,
+        text: '视频时长 5s 视频数量 1个 分辨率 480p 720p 视频格式 mp4 mov',
+        duration: '5',
+        durationOptions: [{ value: '5s', selectedScore: 100 }],
+        resolutionOptions: [{ value: '480p', selectedScore: 100 }, { value: '720p', selectedScore: 0 }],
+        outputFormatOptions: [{ value: 'mp4', selectedScore: 100 }, { value: 'mov', selectedScore: 0 }],
+      },
+      // A larger ancestor can also contain the popover; it must not hide the selected controls.
+      {
+        area: 900,
+        text: '页面容器 视频时长 5s 视频数量 1个 分辨率 480p 720p 视频格式 mp4 mov',
+        duration: '5',
+        durationOptions: [{ value: '5s', selectedScore: 100 }],
+        resolutionOptions: [{ value: '480p', selectedScore: 100 }, { value: '720p', selectedScore: 0 }],
+        outputFormatOptions: [{ value: 'mp4', selectedScore: 100 }, { value: 'mov', selectedScore: 0 }],
+      },
+      // A nested duration-only row is intentionally not a config panel candidate.
+      { area: 20, text: '视频时长 5s', duration: '5', durationOptions: [{ value: '5s', selectedScore: 100 }], resolutionOptions: [], outputFormatOptions: [] },
+    ],
+  });
+
+  assert.deepEqual(summary, {
+    panel: true, compact: '5s | 480p | 1个 | mp4', duration: '5', resolution: '480p', outputFormat: 'mp4',
+    panelText: '视频时长 5s 视频数量 1个 分辨率 480p 720p 视频格式 mp4 mov',
+  });
+  assert.equal(videoConfigMatches(summary, { duration: 5, resolution: '480p', output_format: 'mp4', image_type: 'reference_image' }), true);
+});
+
+test('video config summary does not infer an ambiguous or missing selected control', () => {
+  const summary = summarizeVideoConfigPanelSnapshot({
+    panels: [{
+      area: 400, text: '视频时长 分辨率 视频格式', duration: '5', durationOptions: [],
+      resolutionOptions: [{ value: '480p', selectedScore: 0 }, { value: '720p', selectedScore: 0 }],
+      outputFormatOptions: [{ value: 'mp4', selectedScore: 100 }, { value: 'mov', selectedScore: 100 }],
+    }],
+  });
+  assert.equal(summary.resolution, '');
+  assert.equal(summary.outputFormat, '');
+  assert.equal(videoConfigMatches(summary, { duration: 5, resolution: '480p', output_format: 'mp4', image_type: 'reference_image' }), false);
 });
 
 function project(overrides = {}) {
