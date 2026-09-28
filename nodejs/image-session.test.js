@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createImageSession } from './image-session.js';
+import { createImageSession, IMAGE_ASPECT_RATIOS, normalizeImageRatio } from './image-session.js';
 
 function deferred() {
   let resolve;
@@ -173,6 +173,37 @@ async function withSession(harness, callback, options = {}) {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 }
+
+test('image ratio normalization accepts only the Canvas-supported ratios', () => {
+  const supported = ['1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '16:9', '9:16', '21:9'];
+  assert.deepEqual([...IMAGE_ASPECT_RATIOS], supported);
+  for (const ratio of supported) assert.equal(normalizeImageRatio(ratio), ratio);
+  assert.equal(normalizeImageRatio('  3:2  '), '3:2');
+  for (const ratio of ['7:5', 'smart', 'adaptive', '   ']) assert.equal(normalizeImageRatio(ratio), 'auto');
+});
+
+test('image submissions send auto AspectRatio for unsupported input without changing GenerationParams', async () => {
+  const harness = createHarness();
+  await withSession(harness, async (session) => {
+    await Promise.all(['7:5', 'smart', 'adaptive', '   '].map((ratio) => session.runTask(`task-ratio-${ratio || 'blank'}`, task({ prompt: ratio, ratio }))));
+    const submissions = harness.calls.filter((call) => call.path === '/proxy/api/v1/tasks/image/generate');
+    assert.equal(submissions.length, 4);
+    assert.ok(submissions.every((call) => call.body.ModelConf.AspectRatio === 'auto'));
+    assert.ok(submissions.every((call) => !('AspectRatio' in call.body.GenerationParams[0])));
+    assert.ok(submissions.every((call) => !('Resolution' in call.body.GenerationParams[0])));
+  });
+});
+
+test('direct image-session requests retain the legacy 9:16 ratio default', async () => {
+  const harness = createHarness();
+  await withSession(harness, async (session) => {
+    const request = task();
+    delete request.ratio;
+    await session.runTask('task-default-ratio', request);
+    const submission = harness.calls.find((call) => call.path === '/proxy/api/v1/tasks/image/generate');
+    assert.equal(submission.body.ModelConf.AspectRatio, '9:16');
+  });
+});
 
 test('concurrent readiness creates one fixed 9:16 image project and keeps its canvas open', async () => {
   const initGate = deferred();

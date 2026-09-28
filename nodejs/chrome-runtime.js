@@ -82,6 +82,7 @@ export function createChromeRuntime(options) {
       headless: false,
       userDataDir: options.userDataDir,
       defaultViewport: FIXED_VIEWPORT,
+      protocolTimeout: options.protocolTimeoutMs ?? 120_000,
       args: ['--start-maximized', '--disable-extension-welcome-page'],
     });
     browserURL = browser.wsEndpoint();

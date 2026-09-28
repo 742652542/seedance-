@@ -5,6 +5,7 @@ import { resolveDramartTeamId } from './dramart-team.js';
 import { DEFAULT_VISUAL_PROMPT_ID, projectNameForStyle, resolveDramartVisualPromptId } from './dramart-style.js';
 
 const DEFAULT_TEMP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tmp-upload-images');
+export const IMAGE_ASPECT_RATIOS = new Set(['1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '16:9', '9:16', '21:9']);
 const IMAGE_MODEL_MAP = {
   'Doubao-Seedream-5.0-Pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'doubao-seedream-5-0-pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
@@ -53,6 +54,11 @@ function normalizeVisualPromptId(value) {
   return String(value || '').trim() || DEFAULT_VISUAL_PROMPT_ID;
 }
 
+export function normalizeImageRatio(value) {
+  const ratio = String(value ?? '').trim();
+  return IMAGE_ASPECT_RATIOS.has(ratio) ? ratio : 'auto';
+}
+
 function normalizeRequest(request, defaultStyleId) {
   const model = resolveImageModel(request.model || 'ep-20260318144532-28ssz');
   return {
@@ -60,7 +66,7 @@ function normalizeRequest(request, defaultStyleId) {
     model: model.code,
     modelName: request.model_name || request.modelName || model.name,
     prompt: String(request.prompt || '').trim(),
-    ratio: request.ratio || request.aspect_ratio || request.ratios || '9:16',
+    ratio: normalizeImageRatio(request.ratio || request.aspect_ratio || request.ratios || '9:16'),
     resolution: request.resolution || '1k',
     count: Math.max(1, Number(request.count || request.n || 1)),
     styleId: normalizeVisualPromptId(request.style_id || request.styleId || defaultStyleId),

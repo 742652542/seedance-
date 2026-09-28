@@ -8,11 +8,13 @@ import puppeteer from 'puppeteer-core';
 import { createChromeRuntime } from './chrome-runtime.js';
 import { resolveDramartTeamId } from './dramart-team.js';
 import { createImageSession, resolveImageModel } from './image-session.js';
+import { createCanvasVideoSession, resolveCanvasVideoModel } from './canvas-video-session.js';
 import { createImageTaskStatusPanel } from './image-task-status-panel.js';
 import { runVideoChild } from './video-child-runner.js';
 import { createVideoPreparationScheduler } from './video-preparation-scheduler.js';
 import { cleanupAbandonedVideoTempDirs, createVideoTempImages } from './video-temp-images.js';
 export { resolveImageModel } from './image-session.js';
+export { resolveCanvasVideoModel } from './canvas-video-session.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 9091);
@@ -101,6 +103,7 @@ function taskAction(body, payload) {
   const explicit = String(body?.action || body?.task_type || body?.type || '').toLowerCase();
   const model = String(payload?.model || body?.model || '');
   if (explicit.includes('image') || IMAGE_MODELS.has(model) || /seedream|ep-20260318144532-28ssz/i.test(model)) return 'generate_image';
+  if (explicit === 'generate_video_project') return 'generate_video_project';
   return 'generate_video';
 }
 
@@ -437,14 +440,25 @@ const imageSession = createImageSessionWithStatusPanel(imageTaskStatusPanel, { s
   log: debugLog,
 } });
 
+const canvasVideoSession = createCanvasVideoSession({
+  getSession: () => imageSession.ensureReady(),
+  fetch,
+  fs,
+  generationTimeoutMs: Number(process.env.VIDEO_GENERATION_TIMEOUT_MS || 30 * 60 * 1000),
+  pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 3000),
+  transferTimeoutMs: Number(process.env.MEDIA_TRANSFER_TIMEOUT_MS || 15 * 60 * 1000),
+  mediaTransferConcurrency: Number(process.env.MEDIA_TRANSFER_CONCURRENCY || 2),
+  log: debugLog,
+});
+
 async function setViewportToWindow(page) {
   await page.setViewport(FIXED_VIEWPORT);
 }
 
 function browserConnectOptions(endpoint) {
   return String(endpoint).startsWith('ws:') || String(endpoint).startsWith('wss:')
-    ? { browserWSEndpoint: endpoint, defaultViewport: FIXED_VIEWPORT }
-    : { browserURL: endpoint, defaultViewport: FIXED_VIEWPORT };
+    ? { browserWSEndpoint: endpoint, defaultViewport: FIXED_VIEWPORT, protocolTimeout: 120_000 }
+    : { browserURL: endpoint, defaultViewport: FIXED_VIEWPORT, protocolTimeout: 120_000 };
 }
 
 function versionURL(endpoint) {
@@ -506,6 +520,7 @@ function extractVideoUrl(data) {
   if (data.video_url) return String(data.video_url);
   if (data.VideoUrl) return String(data.VideoUrl);
   if (Array.isArray(data.videoUrls) && data.videoUrls[0]) return String(data.videoUrls[0]);
+  if (Array.isArray(data.videos) && data.videos[0]) return extractVideoUrl(data.videos[0]);
   if (Array.isArray(data.GeneratedVideos)) {
     const video = data.GeneratedVideos.find((item) => item?.VideoUrl || item?.VideoPreviewUrl);
     return video?.VideoUrl || video?.VideoPreviewUrl || '';
@@ -657,12 +672,24 @@ function buildContent(body) {
   const rawImages = body.images ?? body.image;
   const images = Array.isArray(rawImages) ? rawImages : rawImages ? [rawImages] : [];
   for (const item of images) {
-    const url = typeof item === 'string' ? item : item?.url || item?.image || item?.image_url?.url || item?.image_url;
+    const url = typeof item === 'string' ? item : item?.Url || item?.url || item?.image || item?.image_url?.url || item?.image_url;
     if (!url) continue;
     content.push({
       type: 'image_url',
       role: typeof item === 'object' ? item.type || item.role || body.image_type || 'reference_image' : body.image_type || 'reference_image',
       image_url: { url },
+      ...(typeof item === 'object' ? { reference: item } : {}),
+    });
+  }
+  const rawVideos = body.videos ?? body.video;
+  const videos = Array.isArray(rawVideos) ? rawVideos : rawVideos ? [rawVideos] : [];
+  for (const item of videos) {
+    const url = typeof item === 'string' ? item : item?.Url || item?.url || item?.video || item?.video_url?.url || item?.video_url;
+    if (!url) continue;
+    content.push({
+      type: 'video_url',
+      video_url: { url },
+      ...(typeof item === 'object' ? { reference: item } : {}),
     });
   }
   return content;
@@ -684,7 +711,7 @@ function bodyToPayload(body) {
   };
 
   for (const [key, value] of Object.entries(body)) {
-    if (!(key in payload) && !['prompt', 'image', 'images', 'image_type', 'wait_for_completion', 'apiKey', 'api_key', 'advancedJson', 'advanced_json'].includes(key)) {
+    if (!(key in payload) && !['prompt', 'image', 'images', 'video', 'videos', 'image_type', 'wait_for_completion', 'apiKey', 'api_key', 'advancedJson', 'advanced_json'].includes(key)) {
       payload[key] = value;
     }
   }
@@ -700,13 +727,24 @@ function validatePayload(payload, action = 'generate_video') {
     if (!payload.content?.some((item) => item?.type === 'image_url')) return '图片生成至少需要 1 张参考图';
     return '';
   }
-  if (!MODELS.has(String(payload.model || ''))) {
+  if (action === 'generate_video' && !resolveCanvasVideoModel(payload.model)) {
+    return `不支持的模型，可选值为 ${[...MODELS].join('、')}`;
+  }
+  if (action === 'generate_video_project' && !MODELS.has(String(payload.model || ''))) {
     return `不支持的模型，可选值为 ${[...MODELS].join('、')}`;
   }
   if (!contentPrompt(payload.content)) return 'prompt 不能为空';
   if (!Number.isInteger(payload.duration) || payload.duration <= 0) return 'duration 必须是正整数秒';
   if (!VIDEO_RESOLUTIONS.has(String(payload.resolution || '').toLowerCase())) {
     return 'resolution 不支持，可选值为 480p、720p、1080p、4k';
+  }
+  if (action === 'generate_video') {
+    const genType = payload.gen_type || payload.genType || 'reference_frame';
+    if (!['reference_frame', 'head_tail_frame'].includes(genType)) return 'gen_type 不支持，可选值为 reference_frame、head_tail_frame';
+    const images = (payload.content || []).filter((item) => item?.type === 'image_url');
+    const videos = (payload.content || []).filter((item) => item?.type === 'video_url');
+    if (genType === 'head_tail_frame' && videos.length) return '首尾帧模式不支持参考视频';
+    if (genType === 'head_tail_frame' && (images.length < 1 || images.length > 2)) return '首尾帧模式需要 1–2 张图片';
   }
   return '';
 }
@@ -715,8 +753,17 @@ function requestForWorkflow(payload) {
   const images = (payload.content || [])
     .filter((item) => item?.type === 'image_url')
     .map((item) => ({
+      ...(item.reference || {}),
       type: item.role || 'reference_image',
       url: typeof item.image_url === 'string' ? item.image_url : item.image_url?.url,
+    }))
+    .filter((item) => item.url);
+
+  const videos = (payload.content || [])
+    .filter((item) => item?.type === 'video_url')
+    .map((item) => ({
+      ...(item.reference || {}),
+      url: typeof item.video_url === 'string' ? item.video_url : item.video_url?.url,
     }))
     .filter((item) => item.url);
 
@@ -724,6 +771,7 @@ function requestForWorkflow(payload) {
     ...payload,
     prompt: contentPrompt(payload.content),
     images,
+    videos,
     image_type: images[0]?.type || 'reference_image',
   };
 }
@@ -787,6 +835,62 @@ export function createImageTaskRunner(options) {
 
 const runImageTask = createImageTaskRunner({ imageSession, statusPanel: imageTaskStatusPanel, readJson, writeJson, rm: fs.rm.bind(fs), log: debugLog });
 
+export function createCanvasVideoTaskRunner(options) {
+  const statusPanel = options.statusPanel || {};
+  const panelLog = options.log || debugLog;
+  return async function runCanvasVideoTask(id, requestPath, _body, action, context) {
+    const taskStatusPanel = context.statusPanel || statusPanel;
+    const request = await options.readJson(requestPath);
+    let taskContext = null;
+    let generationResult;
+    try {
+      generationResult = await options.canvasVideoSession.runTask(id, request, {
+        onReady: async (sessionState) => {
+          const project = {
+            projectName: sessionState.projectName,
+            projectId: sessionState.projectId,
+            scriptId: sessionState.scriptId,
+            teamId: sessionState.teamId,
+            url: sessionState.url,
+          };
+          taskContext = { type: 'canvas-video', project, projectName: sessionState.projectName, prompt: request.prompt };
+          const debugInfo = buildDebugTaskInfo(id, taskContext);
+          await options.writeJson(context.runningPath, {
+            ...await options.readJson(context.runningPath),
+            ...debugInfo,
+            status: 'processing',
+            updated_at: now(),
+            dramart: taskContext,
+            completion_response: { ...taskContext, ...debugInfo, status: 'processing' },
+          });
+        },
+        onProgress: ({ stage, detail }) => safePanelCall(taskStatusPanel, 'update', [id, stage, detail], panelLog),
+      });
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(reason == null ? '未知任务错误' : String(reason));
+      safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(error)], panelLog);
+      if (context.taskLifecycle) context.taskLifecycle.panelFailureReported = true;
+      throw error;
+    }
+    const ok = generationResult.status === 'succeeded';
+    const resultItem = generationResult.response || generationResult;
+    const resultData = buildResultData(ok ? 'success' : 'error', id, resultItem, resultItem, ok ? '' : extractError(generationResult, '视频生成失败'), '', taskContext, action);
+    await options.writeJson(context.resultPath, resultData);
+    if (ok) safePanelCall(taskStatusPanel, 'succeed', [id], panelLog);
+    else safePanelCall(taskStatusPanel, 'fail', [id, safePanelError(resultData.error)], panelLog);
+    await options.rm(context.runningPath, { force: true });
+  };
+}
+
+const runCanvasVideoTask = createCanvasVideoTaskRunner({
+  canvasVideoSession,
+  statusPanel: imageTaskStatusPanel,
+  readJson,
+  writeJson,
+  rm: fs.rm.bind(fs),
+  log: debugLog,
+});
+
 export async function cleanupVideoTaskResources({ taskId: id, tempRoot, browser, fsImpl = fs }) {
   const cleanup = createVideoTempImages({ taskId: id, tempRoot, fsImpl }).cleanup();
   const closePage = (async () => {
@@ -822,6 +926,10 @@ export async function runDramartTask(id, requestPath, body, action = 'generate_v
   if (action === 'generate_image') {
     const imageTaskRunner = taskOptions.imageTaskRunner || runImageTask;
     return imageTaskRunner(id, requestPath, body, action, { runningPath, resultPath, ...taskOptions });
+  }
+  if (action === 'generate_video') {
+    const canvasVideoTaskRunner = taskOptions.canvasVideoTaskRunner || runCanvasVideoTask;
+    return canvasVideoTaskRunner(id, requestPath, body, action, { runningPath, resultPath, ...taskOptions });
   }
 
   const plan = taskExecutionPlan(action);
@@ -881,9 +989,9 @@ export function videoWorkflowScript() {
 }
 
 export function taskExecutionPlan(action) {
-  return action === 'generate_image'
-    ? { mode: 'in-process-image-session' }
-    : { mode: 'child-process', script: 'prepare-video-workflow.js' };
+  if (action === 'generate_image') return { mode: 'in-process-image-session' };
+  if (action === 'generate_video') return { mode: 'in-process-canvas-video-session' };
+  return { mode: 'child-process', script: 'prepare-video-workflow.js' };
 }
 
 export function createTaskApp(options = {}) {
@@ -906,6 +1014,19 @@ const appImageSession = options.imageSession || (options.imageSessionOptions
 const appImageTaskRunner = options.imageTaskRunner || (appImageSession
   ? createImageTaskRunner({
     imageSession: appImageSession,
+    statusPanel: appImageTaskStatusPanel,
+    readJson: appReadJson,
+    writeJson: appWriteJson,
+    rm: appRm,
+    log: options.log || debugLog,
+  })
+  : undefined);
+const appCanvasVideoSession = options.canvasVideoSession || (options.canvasVideoSessionOptions
+  ? createCanvasVideoSession(options.canvasVideoSessionOptions)
+  : appImageSession ? createCanvasVideoSession({ getSession: () => appImageSession.ensureReady() }) : null);
+const appCanvasVideoTaskRunner = options.canvasVideoTaskRunner || (appCanvasVideoSession
+  ? createCanvasVideoTaskRunner({
+    canvasVideoSession: appCanvasVideoSession,
     statusPanel: appImageTaskStatusPanel,
     readJson: appReadJson,
     writeJson: appWriteJson,
@@ -1043,7 +1164,7 @@ function observeTask(item, promise) {
     .then(() => null, async (reason) => {
       const error = normalizeTaskError(reason);
       const resultData = await persistTaskError(item, error);
-      if (item.action === 'generate_image' && resultData && !item.panelFailureReported) {
+      if (item.action !== 'generate_video_project' && resultData && !item.panelFailureReported) {
         safePanelCall(appImageTaskStatusPanel, 'fail', [item.id, safePanelError(error)], debugLog);
       }
       return resultData;
@@ -1101,7 +1222,10 @@ async function initializePersistedTasks() {
     if (record.task_id !== id) {
       throw new Error(`恢复任务失败：record.task_id 与文件名不一致 ${entry.name}`);
     }
-    if (record?.action !== 'generate_video') continue;
+    const recoveredAction = record?.action === 'generate_video' && record.status === 'queued'
+      ? 'generate_video_project'
+      : record?.action;
+    if (!['generate_video', 'generate_video_project'].includes(recoveredAction)) continue;
 
     const fileName = entry.name;
     const resultPath = path.join(appResultsDir, fileName);
@@ -1121,7 +1245,7 @@ async function initializePersistedTasks() {
         '服务重启导致任务中断；为避免重复创建集或重复提交，任务未自动重跑',
         '',
         record.dramart || null,
-        'generate_video',
+        recoveredAction,
       );
       resultData.dramart = record.dramart;
       await appWriteJson(resultPath, resultData);
@@ -1139,8 +1263,8 @@ async function initializePersistedTasks() {
       queued.push({
         id,
         requestPath,
-        body: { ...request, action: 'generate_video' },
-        action: 'generate_video',
+        body: { ...request, action: recoveredAction },
+        action: recoveredAction,
         runningPath,
         resultPath,
         createdAt: Number(record.created_at) || 0,
@@ -1179,7 +1303,8 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
   }
 
   const action = taskAction(req.body || {}, payload);
-  if (action === 'generate_video') payload.resolution = String(payload.resolution).toLowerCase();
+  if (action === 'generate_video' && !req.body?.model) payload.model = 'Doubao-Seedance-2-0';
+  if (action === 'generate_video' || action === 'generate_video_project') payload.resolution = String(payload.resolution).toLowerCase();
   const validationError = validatePayload(payload, action);
   if (validationError) return res.json(errorResponse(validationError, { payload }));
 
@@ -1192,17 +1317,17 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
 
   const taskRecord = {
     action,
-    status: action === 'generate_image' ? 'processing' : 'queued',
+    status: action === 'generate_video_project' ? 'queued' : 'processing',
     task_id: id,
     debug_task_id: id,
     model: payload.model,
     payload,
     created_at: now(),
     updated_at: now(),
-    completion_response: { task_id: id, debug_task_id: id, status: action === 'generate_image' ? 'processing' : 'queued' },
+    completion_response: { task_id: id, debug_task_id: id, status: action === 'generate_video_project' ? 'queued' : 'processing' },
   };
   await appWriteJson(taskFile(appRunningDir, id), taskRecord);
-  if (action === 'generate_image') {
+  if (action !== 'generate_video_project') {
     safePanelCall(appImageTaskStatusPanel, 'add', [id, taskRecord.created_at * 1000], debugLog);
   }
   debugLog(`[/api/ask] queued task_id=${id} request=${requestPath}`);
@@ -1215,7 +1340,7 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
     runningPath: taskFile(appRunningDir, id),
     resultPath: taskFile(appResultsDir, id),
   };
-  const runPromise = observeTask(runItem, action === 'generate_video'
+  const runPromise = observeTask(runItem, action === 'generate_video_project'
     ? videoScheduler.enqueue(runItem)
     : Promise.resolve().then(async () => {
       const browserLease = await acquireBrowserLease();
@@ -1229,6 +1354,7 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
           buildResultData,
           statusPanel: appImageTaskStatusPanel,
           imageTaskRunner: appImageTaskRunner,
+          canvasVideoTaskRunner: appCanvasVideoTaskRunner,
           taskLifecycle: runItem,
         });
       } finally {
@@ -1243,7 +1369,7 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
       message: '任务已发送给客户端',
       task_id: id,
       debug_task_id: id,
-      queue_position: action === 'generate_video' ? videoScheduler.queuePosition(id) : 0,
+      queue_position: action === 'generate_video_project' ? videoScheduler.queuePosition(id) : 0,
       completion_response: taskRecord.completion_response,
     });
   }

@@ -80,7 +80,7 @@ function imageBody(overrides = {}) {
 
 function videoBody(overrides = {}) {
   return {
-    action: 'generate_video',
+    action: 'generate_video_project',
     model: 'Doubao-Seedance-2.0-fast',
     prompt: 'video',
     duration: 5,
@@ -300,8 +300,8 @@ test('startup recovery restores queued videos in persisted order and interrupts 
     await withDeadline(app.locals.ready, 'startup recovery waited for task completion');
     assert.deepEqual(starts.map((item) => item.id), [ids.a]);
     assert.equal(starts[0].requestPath, path.join(requestsDir, `${ids.a}.json`));
-    assert.equal(starts[0].action, 'generate_video');
-    assert.equal(starts[0].body.action, 'generate_video');
+    assert.equal(starts[0].action, 'generate_video_project');
+    assert.equal(starts[0].body.action, 'generate_video_project');
     assert.equal(app.locals.videoScheduler.queuePosition(ids.a), 0);
     assert.equal(app.locals.videoScheduler.queuePosition(ids.b), 1);
 
@@ -770,7 +770,7 @@ test('wait_for_completion image responses keep each local task_id and result', a
   });
 });
 
-test('video API routing retains the child-process video workflow', async () => {
+test('project video API routing retains the child-process workflow while canvas video runs in-process', async () => {
   let routedAction = '';
   await withServer(async (id, _requestPath, _body, action, context) => {
     routedAction = action;
@@ -779,19 +779,53 @@ test('video API routing retains the child-process video workflow', async () => {
     await fs.rm(context.runningPath, { force: true });
   }, async (baseUrl) => {
     await postAsk(baseUrl, {
-      action: 'generate_video',
+      action: 'generate_video_project',
       model: 'Doubao-Seedance-2.0-fast',
       prompt: 'video',
       duration: 5,
       resolution: '720p',
       wait_for_completion: true,
     });
-    assert.equal(routedAction, 'generate_video');
-    assert.deepEqual(taskExecutionPlan('generate_video'), {
+    assert.equal(routedAction, 'generate_video_project');
+    assert.deepEqual(taskExecutionPlan('generate_video_project'), {
       mode: 'child-process',
       script: 'prepare-video-workflow.js',
     });
+    assert.deepEqual(taskExecutionPlan('generate_video'), { mode: 'in-process-canvas-video-session' });
     assert.deepEqual(taskExecutionPlan('generate_image'), { mode: 'in-process-image-session' });
+  });
+});
+
+test('canvas video API preserves mixed reference metadata and rejects videos in head-tail mode', async () => {
+  const observed = [];
+  await withServer(async (id, requestPath, _body, action, context) => {
+    observed.push({ action, request: JSON.parse(await fs.readFile(requestPath, 'utf8')) });
+    const item = { Status: 'done', GeneratedVideos: [{ VideoUrl: 'https://cdn.test/canvas.mp4' }] };
+    await context.writeJson(context.resultPath, context.buildResultData('success', id, item, item, '', '', null, action));
+    await fs.rm(context.runningPath, { force: true });
+  }, async (baseUrl) => {
+    const response = await postAsk(baseUrl, {
+      action: 'generate_video',
+      model: 'ep-20260729173114-qjxc2',
+      prompt: '混合参考',
+      images: [{ Key: 'image.png', Url: 'https://cdn.test/image.png', ArkAssetId: 'asset-image' }],
+      videos: [{ Key: 'video.mp4', Url: 'https://cdn.test/video.mp4', ResourceId: 'media-ref', Duration: 4.096 }],
+      wait_for_completion: true,
+    });
+    assert.equal(response.result.video_url, 'https://cdn.test/canvas.mp4');
+    assert.equal(observed[0].action, 'generate_video');
+    assert.equal(observed[0].request.images[0].ArkAssetId, 'asset-image');
+    assert.equal(observed[0].request.videos[0].ResourceId, 'media-ref');
+
+    const rejected = await postAsk(baseUrl, {
+      action: 'generate_video', model: 'Doubao-Seedance-2-0', prompt: '首尾帧',
+      gen_type: 'head_tail_frame',
+      images: [{ url: 'https://cdn.test/head.png' }],
+      videos: [{ url: 'https://cdn.test/ref.mp4' }],
+    });
+    assert.equal(rejected.status, 'error');
+    assert.match(rejected.message, /首尾帧模式不支持参考视频/);
+    assert.equal(observed.length, 1);
   });
 });
 
@@ -907,7 +941,6 @@ test('asynchronous image result and files routes retain compatible fields', asyn
 
 test('video completion response keeps key compatibility fields', async () => {
   await withServer(async (id, _requestPath, _body, action, context) => {
-    await context.onPrepared({ taskEpisode: { EpisodeId: 'episode', ShotId: 'shot' } });
     const item = { status: 'succeeded', VideoUrl: 'https://cdn.test/video.mp4' };
     await context.writeJson(context.resultPath, context.buildResultData('success', id, item, { upstream: true }, '', '', null, action));
     await fs.rm(context.runningPath, { force: true });
@@ -1104,7 +1137,7 @@ test('parent marker env is used by the child workflow to select the exact create
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-server-marked-page-'));
   const id = 'dramart-20260910000000-abcde';
   try {
-    await runDramartTask(id, path.join(root, 'request.json'), {}, 'generate_video', {
+    await runDramartTask(id, path.join(root, 'request.json'), {}, 'generate_video_project', {
       runningPath: path.join(root, 'running.json'),
       resultPath: path.join(root, 'result.json'),
       ensureStandbyBrowser: async () => ({ browser, browserURL: 'http://browser' }),
@@ -1141,7 +1174,7 @@ test('task page marker failure closes that page and prevents child spawn', async
   };
   const browser = { newPage: async () => taskPage };
   try {
-    await assert.rejects(runDramartTask('dramart-20260910000000-abcde', 'request.json', {}, 'generate_video', {
+    await assert.rejects(runDramartTask('dramart-20260910000000-abcde', 'request.json', {}, 'generate_video_project', {
       runningPath: path.join(root, 'running.json'),
       resultPath: path.join(root, 'result.json'),
       ensureStandbyBrowser: async () => ({ browser, browserURL: 'http://browser' }),
@@ -1245,7 +1278,7 @@ test('image tasks start immediately while a video occupies the preparation slot'
   let videoContext;
   await withServer(async (id, _requestPath, _body, action, context) => {
     starts.push(action);
-    if (action === 'generate_video') {
+    if (action === 'generate_video_project') {
       videoContext = context;
       return videoCompletion.promise;
     }
@@ -1254,7 +1287,7 @@ test('image tasks start immediately while a video occupies the preparation slot'
   }, async (baseUrl) => {
     await postAsk(baseUrl, videoBody());
     const image = await postAsk(baseUrl, imageBody({ wait_for_completion: true }));
-    assert.deepEqual(starts, ['generate_video', 'generate_image']);
+    assert.deepEqual(starts, ['generate_video_project', 'generate_image']);
     assert.equal(image.status, 'completed');
     await videoContext.onPrepared({ taskEpisode: { EpisodeId: 'episode', ShotId: 'shot' } });
     videoCompletion.resolve();
@@ -2110,18 +2143,18 @@ test('image and video tasks wait for authentication before dispatch', async () =
 
     authentication.resolve();
     await waitUntil(() => starts.length === 2, 'tasks did not resume after authentication');
-    assert.deepEqual(new Set(starts.map((item) => item.action)), new Set(['generate_image', 'generate_video']));
+    assert.deepEqual(new Set(starts.map((item) => item.action)), new Set(['generate_image', 'generate_video_project']));
     assert.ok(image.task_id);
     assert.ok(video.task_id);
   }, { authenticate: () => authentication.promise });
 });
 
-test('task app listens on loopback by default and accepts explicit host override', async () => {
+test('task app uses the configured default host and accepts an explicit host override', async () => {
   const testApp = express().get('/health', (_req, res) => res.json({ ok: true }));
   const server = listenTaskApp(testApp, { port: 0 });
   await withDeadline(new Promise((resolve) => server.once('listening', resolve)), 'loopback server did not listen');
   try {
-    assert.equal(server.address().address, '127.0.0.1');
+    assert.equal(server.address().address, process.env.HOST || '0.0.0.0');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

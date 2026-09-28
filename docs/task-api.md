@@ -34,13 +34,14 @@ http://127.0.0.1:9091
 
 ## 2. 任务类型
 
-生图和视频没有两个独立的提交 URL。服务根据请求内容决定任务类型。
+生图和两种视频流程共用一个提交 URL。服务根据请求内容决定任务类型。
 
 判断顺序如下：
 
 1. `action`、`task_type` 或 `type` 包含 `image` 时，判定为生图。
 2. `model` 是已知 Seedream 图片模型时，判定为生图。
-3. 其他情况判定为视频。
+3. 显式传 `generate_video_project` 时，使用旧的项目/分镜网页流程。
+4. 其他情况判定为新的 Canvas 视频 API 流程 `generate_video`。
 
 建议调用方始终显式传入 `action`：
 
@@ -58,6 +59,14 @@ http://127.0.0.1:9091
 }
 ```
 
+旧项目流程使用：
+
+```json
+{
+  "action": "generate_video_project"
+}
+```
+
 ## 3. 提交任务
 
 ### 3.1 接口
@@ -71,11 +80,15 @@ Content-Type: application/json
 
 生图任务由服务进程内的常驻会话执行。服务每次启动都会新建一个名为 `image` 的 manual 项目，以固定项目比例 `9:16` 完成资源确认并长期保留其 Canvas 页面。项目比例只是创建项目所需参数；每个生图请求仍按自身 `ratio` 提交。并发生图请求共享项目和认证页面，但分别上传参考图、创建生成资源并按各自的 `resourceId` 独立轮询，不经过本地串行队列。单个任务失败不会关闭共享页面或中止其他任务；页面关闭或浏览器断连后，后续请求共享一次会话重建。
 
-视频任务使用 FIFO preparation queue 和独立子进程。队列只串行化共享项目确认以及为当前任务创建专属 episode/shot 的准备阶段；子进程输出有效 `TASK_STARTED`，且服务持久化其中的 `EpisodeId`、`ShotId` 等上下文后，下一项立即进入准备阶段。已经 prepared 的任务继续在各自独立页面中并发上传图片、填写参数、提交生成和轮询结果，不必等待前一个视频任务完成。
+`generate_video` 与生图共用已认证的常驻 Canvas 预加载会话，直接调用 Canvas 的资源上传、`/tasks/video_gen/create` 和查询接口，不创建 episode/shot，也不进入旧视频队列。多个 Canvas 视频任务可以并发执行：它们共享认证页面，但分别上传素材、创建 `ResourceId`，并按各自的 `TaskIds` 独立轮询。它支持纯文字、仅图片、仅视频、图片和视频混合参考。
+
+远程参考素材采用磁盘流式下载和流式上传，不会把完整视频载入内存。`MEDIA_TRANSFER_CONCURRENCY` 控制整个 Canvas 会话同时传输的素材数，默认 `2`；`MEDIA_TRANSFER_TIMEOUT_MS` 分别控制单个素材下载阶段和上传阶段的总超时，默认 `900000` 毫秒。
+
+`generate_video_project` 保留原来的 FIFO preparation queue 和独立子进程。队列只串行化共享项目确认以及为当前任务创建专属 episode/shot 的准备阶段；子进程输出有效 `TASK_STARTED`，且服务持久化其中的 `EpisodeId`、`ShotId` 等上下文后，下一项立即进入准备阶段。已经 prepared 的任务继续在各自独立页面中并发执行。
 
 只有在有效 `TASK_STARTED` 上下文持久化前无法确认子进程退出，才会阻塞视频 preparation queue；持久化成功后该任务已经离开共享准备区，后续失败或退出状态不明不会追溯阻塞下一项。
 
-视频任务的 `queue_position` 是动态值：`0` 表示任务已占用视频 preparation 调度槽，此时可能仍在等待认证，或正在执行项目确认和专属 episode/shot 创建；正数表示仍在等待该调度槽的 FIFO 位置。服务持久化有效 `TASK_STARTED` 后，任务进入 `processing` 并释放调度槽，后续查询不再包含 `queue_position`。服务重启时，持久化为 `queued` 的视频任务按原顺序恢复排队；持久化为 `processing` 的视频任务会以“服务重启导致任务中断”失败结束，不会自动重放，以免重复创建 episode/shot 或重复提交。视频请求中需要物化的临时图片存放在按 `task_id` 隔离的目录中，任务结束后只清理该任务自己的目录。
+只有 `generate_video_project` 使用动态 `queue_position`。`generate_video` 与生图一样直接返回 `queue_position: 0`，该字段只是兼容字段。服务重启时，处理中任务不会自动重复提交。
 
 ### 3.2 视频请求示例
 
@@ -90,6 +103,13 @@ Content-Type: application/json
       "url": "https://example.com/cat.jpg"
     }
   ],
+  "videos": [
+    {
+      "url": "https://example.com/motion.mp4",
+      "title": "运动参考"
+    }
+  ],
+  "gen_type": "reference_frame",
   "resolution": "720p",
   "ratio": "16:9",
   "duration": 5,
@@ -102,11 +122,14 @@ Content-Type: application/json
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |---|---|---:|---|---|
-| `action` | string | 建议 | 自动判断 | 建议固定传 `generate_video` |
-| `model` | string | 否 | `Doubao-Seedance-2.0-fast` | Seedance 页面模型名称，必须与支持列表完全一致 |
+| `action` | string | 建议 | 自动判断 | 新 Canvas 流程固定传 `generate_video`；旧项目流程传 `generate_video_project` |
+| `model` | string | 否 | Canvas：`Doubao-Seedance-2-0`；旧项目：`Doubao-Seedance-2.0-fast` | Seedance 页面模型名称或下表对应的实际 Code |
 | `prompt` | string | 是 | 无 | 视频提示词，不能为空 |
 | `images` | array/string | 否 | `[]` | 一张或多张参考图片 |
 | `image` | object/string | 否 | 无 | 单张图片，是 `images` 的简写 |
+| `videos` | array/string | 否 | `[]` | 一段或多段参考视频；仅 `reference_frame` 可用 |
+| `video` | object/string | 否 | 无 | 单段视频，是 `videos` 的简写 |
+| `gen_type` | string | 否 | `reference_frame` | `reference_frame`（全能参考）或 `head_tail_frame`（首尾帧） |
 | `image_type` | string | 否 | `reference_image` | 字符串图片使用的默认角色 |
 | `resolution` | string | 否 | `720p` | 视频清晰度，支持 `480p`、`720p`、`1080p`、`4k`；大小写输入会规范化为小写 |
 | `ratio` | string | 否 | `16:9` | 视频比例 |
@@ -125,14 +148,33 @@ Content-Type: application/json
 
 ### 3.4 支持的视频模型
 
-```text
-Doubao-Seedance-2.5
-Doubao-Seedance-2-0
-Doubao-Seedance-2.0-fast
-Doubao-Seedance-2.0-mini
+| 页面名称 | `VideoMeta.ModelName` 实际值 |
+|---|---|
+| `Doubao-Seedance-2.5` | `ep-20260729173114-qjxc2` |
+| `Doubao-Seedance-2-0` | `ep-20260322113401-vj4bf` |
+| `Doubao-Seedance-2.0-fast` | `ep-20260320142658-hscwv` |
+| `Doubao-Seedance-2.0-mini` | `doubao-seedance-2-0-mini-260615` |
+
+这些值来自当前登录浏览器实际调用的 `/overview/capabilities/list`，不包含 Wan 系列。
+
+### 3.5 Canvas 视频参考素材与生成模式
+
+`reference_frame` 对应页面的“全能参考”，可不传素材，也可传图片、视频或两者混合。上传后的图片引用为 `Key`、`Url` 和可选 `ArkAssetId`；视频引用另含 `ResourceId` 和可选 `Duration`。
+
+`head_tail_frame` 对应“首尾帧”，必须传 1–2 张图片，第一张是首帧、第二张是尾帧，不能传视频。提交时提示词写入 `KeyFramePrompt`，图片写入 `KeyFrameImages.HeadImage/TailImage`。
+
+`ArkAssetId` 是页面素材审核/资产系统返回的可选标识，不是本地生成值。已有素材可直接传；普通上传未返回时会省略，页面自身的请求构造也允许该字段为空。
+
+图片和视频值均支持 HTTP/HTTPS URL、Data URL、Base64 字符串和服务所在机器上的本地文件路径。也可以直接传已经上传完成的对象：
+
+```json
+{
+  "images": [{ "Key": "path/image.png", "Url": "https://...", "ArkAssetId": "asset-..." }],
+  "videos": [{ "Key": "path/video.mp4", "Url": "https://...", "ResourceId": "media_...", "Duration": 4.096 }]
+}
 ```
 
-### 3.5 视频图片角色
+### 3.5.1 旧项目视频图片角色
 
 支持以下图片角色：
 
@@ -142,7 +184,7 @@ first_frame
 last_frame
 ```
 
-使用 `first_frame` 或 `last_frame` 时，视频工作流会采用图生视频模式。
+以下角色仅用于 `generate_video_project`。使用 `first_frame` 或 `last_frame` 时，旧项目视频工作流会采用图生视频模式。
 
 图片可以使用字符串：
 
@@ -214,7 +256,7 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 | `prompt` | string | 是 | 无 | 生图提示词，不能为空 |
 | `images` | array/string | 是 | 无 | 至少一张参考图片 |
 | `image` | object/string | 否 | 无 | 单张参考图片简写 |
-| `ratio` | string | 否 | `16:9` | 图片生成比例 |
+| `ratio` | string | 否 | `16:9` | 图片生成比例；支持 `1:1`、`3:2`、`2:3`、`3:4`、`4:3`、`4:5`、`5:4`、`16:9`、`9:16`、`21:9`，其他值按页面“智能”（`auto`）提交 |
 | `aspect_ratio` | string | 否 | 无 | `ratio` 的别名 |
 | `ratios` | string | 否 | 无 | `ratio` 的兼容别名 |
 | `resolution` | string | 否 | `720p` | 图片生成分辨率 |
@@ -674,7 +716,8 @@ while (true) {
 - 服务入口：`nodejs/task-server.js`
 - 任务类型判断：`nodejs/task-server.js` 中的 `taskAction`
 - 请求标准化：`nodejs/task-server.js` 中的 `bodyToPayload`
-- 视频自动化：`nodejs/prepare-video-workflow.js`
+- Canvas 视频会话：`nodejs/canvas-video-session.js`
+- 旧项目视频自动化：`nodejs/prepare-video-workflow.js`
 - 常驻生图会话：`nodejs/image-session.js`
 - 旧生图命令行工作流（任务服务不再调用）：`nodejs/prepare-image-workflow.js`
 - 本地任务请求：`seedance_tasks/requests/`

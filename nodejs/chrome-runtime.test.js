@@ -47,6 +47,7 @@ test('runtime launches Chrome with project user data and restarts only after exp
     headless: false,
     userDataDir: 'F:\\project\\.chrome-user-data',
     defaultViewport: { width: 1920, height: 920 },
+    protocolTimeout: 120_000,
     args: ['--start-maximized', '--disable-extension-welcome-page'],
   });
 

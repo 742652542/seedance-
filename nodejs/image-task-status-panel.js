@@ -89,7 +89,7 @@ export async function renderImageTaskStatusPanel(page, snapshot) {
     }
 
     const header = makeElement('div', 'display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;flex-shrink:0');
-    header.appendChild(makeElement('strong', 'font-size:15px', 'Seedance 生图任务'));
+    header.appendChild(makeElement('strong', 'font-size:15px', 'Seedance 生成任务'));
     header.appendChild(makeElement('span', 'color:#60a5fa;font-weight:700', `执行中 ${currentSnapshot.activeCount} 个`));
 
     const content = makeElement('div', 'display:flex;flex-direction:column;gap:9px;min-height:0;overflow-y:auto');
