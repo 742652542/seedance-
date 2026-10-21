@@ -1,8 +1,8 @@
 import express from 'express';
 import open from 'open';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -107,6 +107,9 @@ async function handleGetTask(req, res) {
   const model = req.query.model || '';
   const providedKey = req.query.apiKey || '';
   if (!id) return res.status(400).json({ error: '缺少任务 ID' });
+  if (/[\/\\%]/.test(id) || id === '.' || id === '..') {
+    return res.status(400).json({ error: '无效的任务 ID' });
+  }
   validateModel(model);
 
   const apiKey = await getApiKey(model, providedKey);
@@ -136,17 +139,57 @@ async function handleListTasks(req, res) {
 }
 
 function asyncRoute(handler) {
-  return (req, res, next) => Promise.resolve(handler(req, res)).catch(next);
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
-const app = express();
+export const app = express();
+const publicRoot = join(__dirname, 'public');
+
+// Inspect the original path before Express or the filesystem normalizes it.
+app.use((req, res, next) => {
+  let pathname;
+  try {
+    pathname = decodeURIComponent(req.url.split('?')[0]);
+  } catch {
+    return res.status(400).json({ error: '无效的请求路径' });
+  }
+  const unsafe = /[\\%\x00-\x1f\x7f<>:"|?*]/.test(pathname)
+    || pathname.split('/').some(part => part === '.' || part === '..'
+      || /[. ]$/.test(part)
+      || /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(part));
+  if (unsafe) return res.status(400).json({ error: '无效的请求路径' });
+  res.locals.pathname = pathname;
+  next();
+});
 
 app.use(express.json({ limit: '200mb' }));
-app.use(express.static(join(__dirname, 'public')));
+// Keep static reads inside public, including directory indexes and linked files.
+app.use(asyncRoute(async (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const root = await realpath(publicRoot);
+  const inside = candidate => {
+    const path = relative(root, candidate);
+    return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+  };
+  try {
+    const candidate = await realpath(join(root, res.locals.pathname));
+    if (!inside(candidate)) return res.status(403).json({ error: '禁止访问该文件' });
+    if ((await stat(candidate)).isDirectory()) {
+      const index = await realpath(join(candidate, 'index.html'));
+      if (!inside(index)) return res.status(403).json({ error: '禁止访问该文件' });
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+  }
+  next();
+}));
+app.use(express.static(publicRoot, { dotfiles: 'deny' }));
 
 app.post('/api/tasks', asyncRoute(handleCreate));
 app.get('/api/tasks/:id', asyncRoute(handleGetTask));
 app.get('/api/tasks', asyncRoute(handleListTasks));
+
+app.use((req, res) => res.status(404).json({ error: '接口不存在' }));
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
@@ -155,13 +198,14 @@ app.use((error, req, res, next) => {
     return res.status(413).json({ error: '上传内容太大，请减少图片数量或降低图片尺寸后重试' });
   }
 
-  res.status(error.statusCode || 500).json({
-    error: error.message || '服务器错误',
+  const status = error instanceof URIError ? 400 : (error.statusCode || 500);
+  res.status(status).json({
+    error: status >= 500 ? '服务器错误' : (error.message || '无效的请求'),
     detail: error.data
   });
 });
 
-app.listen(PORT, async () => {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) app.listen(PORT, async () => {
   const url = `http://localhost:${PORT}`;
   console.log(`Seedance video task UI: ${url}`);
 
