@@ -2,12 +2,16 @@ import nodeFs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDramartTeamId } from './dramart-team.js';
-import { DEFAULT_VISUAL_PROMPT_ID, projectNameForStyle, resolveDramartVisualPromptId } from './dramart-style.js';
+import { DEFAULT_VISUAL_PROMPT_ID, resolveDramartVisualPromptId } from './dramart-style.js';
 
 const DEFAULT_TEMP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tmp-upload-images');
 export const IMAGE_ASPECT_RATIOS = new Set(['1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '16:9', '9:16', '21:9']);
 const IMAGE_MODEL_MAP = {
+  'doubao-seedream-5.5': { code: 'ep-20261112220042-6vzbt', name: 'Seedream-5.5' },
+  'seedream-5.5': { code: 'ep-20261112220042-6vzbt', name: 'Seedream-5.5' },
+  'ep-20261112220042-6vzbt': { code: 'ep-20261112220042-6vzbt', name: 'Seedream-5.5' },
   'Doubao-Seedream-5.0-Pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
+  'doubao-seedream-5.0-pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'doubao-seedream-5-0-pro': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'ep-20260709194802-qsvc2': { code: 'ep-20260709194802-qsvc2', name: 'Doubao-Seedream-5.0-Pro' },
   'Doubao-Seedream-5.0-lite': { code: 'ep-20260318144532-28ssz', name: 'Doubao-Seedream-5.0-lite' },
@@ -20,6 +24,11 @@ const IMAGE_MODEL_MAP = {
 
 export function resolveImageModel(model) {
   return IMAGE_MODEL_MAP[model] || IMAGE_MODEL_MAP[String(model || '').toLowerCase()] || IMAGE_MODEL_MAP['ep-20260709194802-qsvc2'];
+}
+
+export function normalizeImageResolution(model, resolution, fallback = '1k') {
+  if (resolveImageModel(model).code === 'ep-20261112220042-6vzbt' && (!resolution || resolution === '1k')) return '1.5k';
+  return resolution || fallback;
 }
 
 function extensionFromMime(mime) {
@@ -54,9 +63,11 @@ function normalizeVisualPromptId(value) {
   return String(value || '').trim() || DEFAULT_VISUAL_PROMPT_ID;
 }
 
-export function normalizeImageRatio(value) {
+export function normalizeImageRatio(value, model) {
   const ratio = String(value ?? '').trim();
-  return IMAGE_ASPECT_RATIOS.has(ratio) ? ratio : 'auto';
+  const normalized = IMAGE_ASPECT_RATIOS.has(ratio) ? ratio : 'auto';
+  if (normalized === 'auto' && model != null && resolveImageModel(model).code === 'ep-20260709194802-qsvc2') return '1:1';
+  return normalized;
 }
 
 function normalizeRequest(request, defaultStyleId) {
@@ -66,8 +77,8 @@ function normalizeRequest(request, defaultStyleId) {
     model: model.code,
     modelName: request.model_name || request.modelName || model.name,
     prompt: String(request.prompt || '').trim(),
-    ratio: normalizeImageRatio(request.ratio || request.aspect_ratio || request.ratios || '9:16'),
-    resolution: request.resolution || '1k',
+    ratio: normalizeImageRatio(request.ratio || request.aspect_ratio || request.ratios || '9:16', model.code),
+    resolution: normalizeImageResolution(model.code, request.resolution),
     count: Math.max(1, Number(request.count || request.n || 1)),
     styleId: normalizeVisualPromptId(request.style_id || request.styleId || defaultStyleId),
     images: Array.isArray(request.images) ? request.images : request.images ? [request.images] : [],
@@ -148,6 +159,45 @@ async function pagePost(page, requestPath, body, timeoutMs) {
   );
 }
 
+export function dailyProjectName(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date);
+}
+
+async function findDailyProject(post, teamId, projectName) {
+  const seen = new Set();
+  for (let pageIndex = 1; pageIndex <= 100; pageIndex += 1) {
+    const response = await post('/proxy/api/v1/project/list', {
+      TeamId: teamId, Filters: { CreationMode: 'agent,manual' }, PageIndex: pageIndex, PageSize: 100,
+    });
+    const code = response?.Code ?? response?.code;
+    if (code != null && ![0, 200].includes(Number(code))) throw new Error(`读取项目列表失败: ${code}`);
+    const container = response?.Result ?? response?.result;
+    const items = container?.Items ?? container?.items;
+    if (!Array.isArray(items)) throw new Error('项目列表返回缺少 Items 数组，无法确认当天项目是否存在');
+    for (const item of items) {
+      if ((item.ProjectName ?? item.projectName) !== projectName) continue;
+      if (String(item.TeamId ?? item.teamId ?? teamId) !== String(teamId)) continue;
+      const projectId = item.ProjectId ?? item.projectId;
+      const scriptId = item.ScriptId ?? item.scriptId;
+      if (!projectId || !scriptId) throw new Error(`当天项目 ${projectName} 缺少 ProjectId 或 ScriptId`);
+      return { projectId, scriptId };
+    }
+    const previousCount = seen.size;
+    for (const item of items) seen.add(item.ProjectId ?? item.projectId ?? JSON.stringify(item));
+    const rawTotal = container.Total ?? container.TotalCount ?? container.total ?? container.totalCount ??
+      container.Pagination?.Total ?? container.Pagination?.TotalCount ??
+      container.pagination?.total ?? container.pagination?.totalCount ?? response.Total ?? response.TotalCount;
+    const total = rawTotal == null ? null : Number(rawTotal);
+    if (total !== null && Number.isFinite(total) && total >= 0) {
+      if (seen.size >= total) return null;
+    } else if (items.length < 100) return null;
+    if (seen.size === previousCount) throw new Error('项目分页没有新增记录，无法确认当天项目是否存在');
+  }
+  throw new Error('项目列表超过最大页数，无法确认当天项目是否存在');
+}
+
 export function createImageSession(options = {}) {
   const getBrowser = options.getBrowser;
   if (typeof getBrowser !== 'function') throw new TypeError('getBrowser is required');
@@ -169,6 +219,7 @@ export function createImageSession(options = {}) {
   };
   const log = options.log || (() => {});
   const onSessionReady = options.onSessionReady;
+  const getProjectName = options.getProjectName || dailyProjectName;
   let state = null;
   let initializationPromise = null;
   let generation = 0;
@@ -211,20 +262,28 @@ export function createImageSession(options = {}) {
         log,
       });
       const visualPromptId = resolvedStyle.styleId;
-      const projectName = projectNameForStyle('image', visualPromptId);
-      const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
-        TeamId: teamId,
-        AspectRatio: '9:16',
-        Resolution: '720p',
-        Language: 'en',
-        VisualPromptId: visualPromptId,
-        CreationMode: 'manual',
-      }, requestTimeoutMs);
-      const projectId = createResult.Result?.ProjectId;
-      const scriptId = createResult.Result?.ScriptId;
-      if (!projectId || !scriptId) throw new Error(`创建 image 项目返回缺少 ID: ${JSON.stringify(createResult)}`);
-      await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: projectName, ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
-      await pagePost(page, '/proxy/api/v1/project/update', { Status: 'resource_confirmed', ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
+      const projectName = getProjectName();
+      const existing = await findDailyProject(
+        (requestPath, body) => pagePost(page, requestPath, body, requestTimeoutMs), teamId, projectName,
+      );
+      let projectId = existing?.projectId;
+      let scriptId = existing?.scriptId;
+      if (!existing) {
+        const createResult = await pagePost(page, '/proxy/api/v1/project/create', {
+          TeamId: teamId,
+          AspectRatio: '9:16',
+          Resolution: '720p',
+          Language: 'en',
+          VisualPromptId: visualPromptId,
+          CreationMode: 'manual',
+        }, requestTimeoutMs);
+        projectId = createResult.Result?.ProjectId;
+        scriptId = createResult.Result?.ScriptId;
+        if (!projectId || !scriptId) throw new Error(`创建当天项目返回缺少 ID: ${JSON.stringify(createResult)}`);
+        await pagePost(page, '/proxy/api/v1/project/update', { ProjectName: projectName, ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
+        await pagePost(page, '/proxy/api/v1/project/update', { Status: 'resource_confirmed', ProjectId: projectId, TeamId: teamId }, requestTimeoutMs);
+      }
+      log(`[image-session.project] action=${existing ? 'reuse' : 'create'} name=${projectName} project_id=${projectId}`);
       const url = `https://work.xiaomaomi.cn/dramart/project/${projectId}/${scriptId}/${teamId}/canvas`;
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForNetworkIdle({ idleTime: 1000, timeout: 15000 }).catch(() => {});

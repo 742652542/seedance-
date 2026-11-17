@@ -10,6 +10,7 @@ __pycache__/
 *.out
 seedance_tasks/
 nodejs/tmp-upload-images/
+nodejs/tmp-canvas-video/
 nodejs/flow-inspect/
 nodejs/test-*.json
 backups/

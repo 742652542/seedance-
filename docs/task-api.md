@@ -78,7 +78,7 @@ Content-Type: application/json
 
 默认采用异步模式，接口创建本地任务后立即返回 `task_id`，浏览器自动化流程在后台继续执行。
 
-生图任务由服务进程内的常驻会话执行。服务每次启动都会新建一个名为 `image` 的 manual 项目，以固定项目比例 `9:16` 完成资源确认并长期保留其 Canvas 页面。项目比例只是创建项目所需参数；每个生图请求仍按自身 `ratio` 提交。并发生图请求共享项目和认证页面，但分别上传参考图、创建生成资源并按各自的 `resourceId` 独立轮询，不经过本地串行队列。单个任务失败不会关闭共享页面或中止其他任务；页面关闭或浏览器断连后，后续请求共享一次会话重建。
+生图任务由服务进程内的常驻会话执行。服务初始化时使用上海时区的当天日期（`YYYY-MM-DD`）作为项目名称，不附加风格或其他后缀；分页查找当前团队的同名项目，存在则复用，不存在才新建 manual 项目，以固定项目比例 `9:16` 完成资源确认并长期保留其 Canvas 页面。项目比例只是创建项目所需参数；每个生图请求仍按自身 `ratio` 提交。并发生图请求共享项目和认证页面，但分别上传参考图、创建生成资源并按各自的 `resourceId` 独立轮询，不经过本地串行队列。单个任务失败不会关闭共享页面或中止其他任务；页面关闭或浏览器断连后，后续请求共享一次会话重建。
 
 `generate_video` 与生图共用已认证的常驻 Canvas 预加载会话，直接调用 Canvas 的资源上传、`/tasks/video_gen/create` 和查询接口，不创建 episode/shot，也不进入旧视频队列。多个 Canvas 视频任务可以并发执行：它们共享认证页面，但分别上传素材、创建 `ResourceId`，并按各自的 `TaskIds` 独立轮询。它支持纯文字、仅图片、仅视频、图片和视频混合参考。
 
@@ -150,12 +150,40 @@ Content-Type: application/json
 
 | 页面名称 | `VideoMeta.ModelName` 实际值 |
 |---|---|
+| `Seedance-2.5-Flash` | `ep-20261112160431-rl4w7` |
+| `Wan-3.0` | `ali-wan3.0-video` |
 | `Doubao-Seedance-2.5` | `ep-20260729173114-qjxc2` |
 | `Doubao-Seedance-2-0` | `ep-20260322113401-vj4bf` |
 | `Doubao-Seedance-2.0-fast` | `ep-20260320142658-hscwv` |
 | `Doubao-Seedance-2.0-mini` | `doubao-seedance-2-0-mini-260615` |
 
-这些值来自当前登录浏览器实际调用的 `/overview/capabilities/list`，不包含 Wan 系列。
+这些值来自当前登录浏览器的实际模型能力配置。
+
+Wan-3.0 用于 Canvas 视频流程（`action: generate_video`），`model` 可传 `Wan-3.0`、`wan-3.0` 或实际 Code `ali-wan3.0-video`。支持全能参考与首尾帧两种现有生成模式，页面提供 `480p`、`720p`、`1080p`。例如：
+
+```json
+{
+  "action": "generate_video",
+  "model": "Wan-3.0",
+  "prompt": "云层穿过山谷",
+  "duration": 10,
+  "resolution": "720p"
+}
+```
+
+Canvas 视频流程（`action: generate_video`）支持新增的 Flash 模型，`model` 可传 `doubao-seedance-2.5-flash`、`Doubao-Seedance-2.5-Flash`、页面名称 `Seedance-2.5-Flash` 或实际 Code `ep-20261112160431-rl4w7`。例如：
+
+```json
+{
+  "action": "generate_video",
+  "model": "doubao-seedance-2.5-flash",
+  "prompt": "云层穿过山谷",
+  "duration": 5,
+  "resolution": "720p"
+}
+```
+
+Flash 映射来自当前已登录 Canvas 页面的实际模型配置。本次未扩展旧项目/分镜流程 `generate_video_project` 的模型列表。
 
 ### 3.5 Canvas 视频参考素材与生成模式
 
@@ -259,7 +287,7 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 | `ratio` | string | 否 | `16:9` | 图片生成比例；支持 `1:1`、`3:2`、`2:3`、`3:4`、`4:3`、`4:5`、`5:4`、`16:9`、`9:16`、`21:9`，其他值按页面“智能”（`auto`）提交 |
 | `aspect_ratio` | string | 否 | 无 | `ratio` 的别名 |
 | `ratios` | string | 否 | 无 | `ratio` 的兼容别名 |
-| `resolution` | string | 否 | `720p` | 图片生成分辨率 |
+| `resolution` | string | 否 | 5.5 为 `1.5k`，其他模型为 `720p` | 图片生成分辨率；Seedream 5.5 支持 `1.5k`、`2k` |
 | `count` | number | 否 | `1` | 生成数量，最小为 1 |
 | `n` | number | 否 | 无 | `count` 的别名 |
 | `style_id` | string | 否 | 共享生图项目自动识别的风格 | 本次生成的风格 ID；未传时与共享生图项目的风格一致 |
@@ -271,6 +299,17 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 切换账号后，只有在该团队有多个可见自定义风格、且需要固定选择其中一个时，才配置该账号实际提供的 `DRAMART_VISUAL_PROMPT_ID` 并重启服务。若风格库显示自定义风格数量为 0，服务会安全回退，不能复用旧账号的风格 ID。
 
 ### 3.8 支持的生图模型
+
+Seedream 5.5：
+
+```json
+{
+  "model": "doubao-seedream-5.5",
+  "resolution": "1.5k"
+}
+```
+
+自动转换为 Code `ep-20261112220042-6vzbt` 和 Name `Seedream-5.5`，也可直接传入该 Code 或 `Seedream-5.5`。该模型未传分辨率或传入 `1k` 时使用 `1.5k`，传入 `2k` 时保持原样；页面提供 `1.5k`、`2k` 两种选项。不传模型时仍默认使用 5.0 Pro。
 
 Seedream 5.0 Pro：
 
@@ -303,6 +342,7 @@ Seedream 4.5：
 
 ```text
 Doubao-Seedream-5.0-Pro
+doubao-seedream-5.0-pro
 doubao-seedream-5-0-pro
 Doubao-Seedream-5.0-lite
 doubao-seedream-5-0-lite
@@ -311,6 +351,8 @@ doubao-seedream-4-5
 ```
 
 建议同时显式传入匹配的 `model` 和 `model_name`，避免模型 Code 与显示名称不一致。
+
+比例按模型适配：5.0 Pro 的 `auto`（包括不支持的比例归一化后的 `auto`）会转换为 `1:1`；5.5 的 `auto` 保持原样。其他有效比例保持原样。
 
 ## 4. `/api/ask` 响应
 
@@ -719,7 +761,6 @@ while (true) {
 - Canvas 视频会话：`nodejs/canvas-video-session.js`
 - 旧项目视频自动化：`nodejs/prepare-video-workflow.js`
 - 常驻生图会话：`nodejs/image-session.js`
-- 旧生图命令行工作流（任务服务不再调用）：`nodejs/prepare-image-workflow.js`
 - 本地任务请求：`seedance_tasks/requests/`
 - 运行中任务：`seedance_tasks/running/`
 - 已完成任务：`seedance_tasks/results/`

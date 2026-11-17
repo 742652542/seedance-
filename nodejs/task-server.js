@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { createChromeRuntime } from './chrome-runtime.js';
 import { resolveDramartTeamId } from './dramart-team.js';
-import { createImageSession, resolveImageModel } from './image-session.js';
-import { createCanvasVideoSession, resolveCanvasVideoModel } from './canvas-video-session.js';
+import { createImageSession, normalizeImageRatio, normalizeImageResolution, resolveImageModel } from './image-session.js';
+import { CANVAS_VIDEO_MODELS, createCanvasVideoSession, resolveCanvasVideoModel } from './canvas-video-session.js';
 import { createImageTaskStatusPanel } from './image-task-status-panel.js';
 import { runVideoChild } from './video-child-runner.js';
 import { createVideoPreparationScheduler } from './video-preparation-scheduler.js';
@@ -39,6 +39,9 @@ const MODELS = new Set([
 ]);
 const VIDEO_RESOLUTIONS = new Set(['480p', '720p', '1080p', '4k']);
 const IMAGE_MODELS = new Set([
+  'ep-20261112220042-6vzbt',
+  'doubao-seedream-5.5',
+  'Seedream-5.5',
   'ep-20260709194802-qsvc2',
   'Doubao-Seedream-5.0-Pro',
   'doubao-seedream-5-0-pro',
@@ -260,7 +263,11 @@ export function createAuthenticationGate(options) {
 const chromeRuntime = createChromeRuntime({
   userDataDir: CHROME_USER_DATA_DIR,
   maxAgeMs: 24 * 60 * 60 * 1000,
-  launch: (options) => puppeteer.launch(options),
+  // Chrome can need longer than Puppeteer's 30-second default to restore this
+  // persisted profile and expose its DevTools endpoint.  Without an explicit
+  // launch timeout, Puppeteer kills the visible browser before authentication
+  // has a chance to begin, leaving submitted tasks stuck at "processing".
+  launch: (options) => puppeteer.launch({ ...options, timeout: 120_000 }),
   log: debugLog,
 });
 
@@ -699,7 +706,7 @@ function bodyToPayload(body) {
   let payload = {
     model: body.model || 'Doubao-Seedance-2.0-fast',
     content: buildContent(body),
-    resolution: body.resolution || '720p',
+    resolution: normalizeImageResolution(body.model, body.resolution, '720p'),
     ratio: body.ratio || body.aspect_ratio || body.ratios || '16:9',
     duration: Number(body.duration || 5),
     seed: body.seed ?? -1,
@@ -728,7 +735,7 @@ function validatePayload(payload, action = 'generate_video') {
     return '';
   }
   if (action === 'generate_video' && !resolveCanvasVideoModel(payload.model)) {
-    return `不支持的模型，可选值为 ${[...MODELS].join('、')}`;
+    return `不支持的模型，可选值为 ${[...CANVAS_VIDEO_MODELS].join('、')}`;
   }
   if (action === 'generate_video_project' && !MODELS.has(String(payload.model || ''))) {
     return `不支持的模型，可选值为 ${[...MODELS].join('、')}`;
@@ -1303,6 +1310,10 @@ app.post('/api/ask', asyncRoute(async (req, res) => {
   }
 
   const action = taskAction(req.body || {}, payload);
+  if (action === 'generate_image') {
+    payload.resolution = normalizeImageResolution(payload.model, payload.resolution, '720p');
+    payload.ratio = normalizeImageRatio(payload.ratio, payload.model);
+  }
   if (action === 'generate_video' && !req.body?.model) payload.model = 'Doubao-Seedance-2-0';
   if (action === 'generate_video' || action === 'generate_video_project') payload.resolution = String(payload.resolution).toLowerCase();
   const validationError = validatePayload(payload, action);

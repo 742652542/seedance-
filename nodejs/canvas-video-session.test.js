@@ -50,11 +50,54 @@ function deferred() {
 }
 
 test('live Seedance display names resolve to the model codes used by the canvas', () => {
+  for (const model of ['doubao-seedance-2.5-flash', 'Doubao-Seedance-2.5-Flash', 'Seedance-2.5-Flash', 'ep-20261112160431-rl4w7']) {
+    assert.equal(resolveCanvasVideoModel(model), 'ep-20261112160431-rl4w7');
+  }
   assert.equal(resolveCanvasVideoModel('Doubao-Seedance-2.5'), 'ep-20260729173114-qjxc2');
   assert.equal(resolveCanvasVideoModel('Doubao-Seedance-2-0'), 'ep-20260322113401-vj4bf');
   assert.equal(resolveCanvasVideoModel('Doubao-Seedance-2.0-fast'), 'ep-20260320142658-hscwv');
   assert.equal(resolveCanvasVideoModel('Doubao-Seedance-2.0-mini'), 'doubao-seedance-2-0-mini-260615');
-  assert.equal(resolveCanvasVideoModel('Wan-3.0'), '');
+  for (const model of ['Wan-3.0', 'wan-3.0', 'ali-wan3.0-video']) {
+    assert.equal(resolveCanvasVideoModel(model), 'ali-wan3.0-video');
+  }
+  assert.equal(resolveCanvasVideoModel('unknown-video-model'), '');
+});
+
+test('Wan aliases submit the actual code for reference and head-tail generation', async () => {
+  const { calls, videoSession } = createHarness();
+  for (const model of ['Wan-3.0', 'wan-3.0', 'ali-wan3.0-video']) {
+    for (const gen_type of ['reference_frame', 'head_tail_frame']) {
+      const result = await videoSession.runTask(`wan-${model}-${gen_type}`, {
+        model, gen_type, prompt: 'clouds', duration: 10, resolution: '720p',
+        images: [{ Key: 'head.png', Url: 'https://cdn.test/head.png' }],
+        videos: gen_type === 'reference_frame' ? [{ Key: 'ref.mp4', Url: 'https://cdn.test/ref.mp4', ResourceId: 'reference-video', Duration: 10 }] : [],
+      });
+      assert.equal(result.status, 'succeeded');
+    }
+  }
+  const requests = calls.filter(call => call.path === '/proxy/api/v1/tasks/video_gen/create');
+  assert.equal(requests.length, 6);
+  assert.deepEqual(new Set(requests.map(call => call.body.VideoMeta.GenType)), new Set(['reference_frame', 'head_tail_frame']));
+  for (const request of requests) {
+    assert.equal(request.body.VideoMeta.ModelName, 'ali-wan3.0-video');
+    assert.equal(request.body.VideoMeta.Duration, 10);
+    assert.equal(request.body.VideoMeta.Resolution, '720p');
+  }
+});
+
+test('Flash aliases submit the actual model code without changing duration or resolution', async () => {
+  const { calls, videoSession } = createHarness();
+  for (const model of ['doubao-seedance-2.5-flash', 'Doubao-Seedance-2.5-Flash', 'Seedance-2.5-Flash', 'ep-20261112160431-rl4w7']) {
+    const result = await videoSession.runTask(`flash-${model}`, { model, prompt: 'clouds', duration: 30, resolution: '720p' });
+    assert.equal(result.status, 'succeeded');
+  }
+  const requests = calls.filter(call => call.path === '/proxy/api/v1/tasks/video_gen/create');
+  assert.equal(requests.length, 4);
+  for (const request of requests) {
+    assert.equal(request.body.VideoMeta.ModelName, 'ep-20261112160431-rl4w7');
+    assert.equal(request.body.VideoMeta.Duration, 30);
+    assert.equal(request.body.VideoMeta.Resolution, '720p');
+  }
 });
 
 test('reference-frame text-only request follows the current canvas payload and task-id polling shape', async () => {

@@ -740,6 +740,45 @@ test('image request is persisted as processing before its readiness wait settles
   });
 });
 
+test('Seedream 5.5 aliases and code route to images with the matching model and resolution', async () => {
+  const ready = deferred();
+  await withServer(async () => ready.promise, async (baseUrl, root) => {
+    try {
+      for (const model of ['doubao-seedream-5.5', 'Seedream-5.5', 'ep-20261112220042-6vzbt']) {
+        for (const resolution of [undefined, '1k', '1.5k', '2k']) {
+          const accepted = await postAsk(baseUrl, { model, resolution, prompt: 'test', images: ['https://cdn.test/ref.png'] });
+          assert.equal(accepted.status, 'processing');
+          const request = await readJson(path.join(root, 'requests', `${accepted.task_id}.json`));
+          assert.equal(request.model, 'ep-20261112220042-6vzbt');
+          assert.equal(request.model_name, 'Seedream-5.5');
+          assert.equal(request.resolution, !resolution || resolution === '1k' ? '1.5k' : resolution);
+          const running = await readJson(path.join(root, 'running', `${accepted.task_id}.json`));
+          assert.equal(running.action, 'generate_image');
+          assert.equal(running.payload.resolution, request.resolution);
+        }
+      }
+    } finally { ready.resolve(); }
+  });
+});
+
+test('image API persists model-specific auto ratios for Pro and 5.5', async () => {
+  const ready = deferred();
+  await withServer(async () => ready.promise, async (baseUrl, root) => {
+    try {
+      for (const [model, expected] of [['doubao-seedream-5.0-pro', '1:1'], ['doubao-seedream-5.5', 'auto']]) {
+        for (const ratioField of ['ratio', 'aspect_ratio', 'ratios']) {
+          const accepted = await postAsk(baseUrl, { model, [ratioField]: 'auto', prompt: 'test', images: ['https://cdn.test/ref.png'] });
+          assert.equal(accepted.status, 'processing');
+          const request = await readJson(path.join(root, 'requests', `${accepted.task_id}.json`));
+          const running = await readJson(path.join(root, 'running', `${accepted.task_id}.json`));
+          assert.equal(request.ratio, expected);
+          assert.equal(running.payload.ratio, expected);
+        }
+      }
+    } finally { ready.resolve(); }
+  });
+});
+
 test('explicit 4.5 image code infers its matching model name in workflow request', async () => {
   const ready = deferred();
   await withServer(async () => ready.promise, async (baseUrl, root) => {
@@ -793,6 +832,45 @@ test('project video API routing retains the child-process workflow while canvas 
     });
     assert.deepEqual(taskExecutionPlan('generate_video'), { mode: 'in-process-canvas-video-session' });
     assert.deepEqual(taskExecutionPlan('generate_image'), { mode: 'in-process-image-session' });
+  });
+});
+
+test('Canvas video API accepts Wan names and code at its supported resolutions', async () => {
+  const observed = [];
+  await withServer(async (id, requestPath, _body, action, context) => {
+    observed.push({ action, request: await readJson(requestPath) });
+    const item = { Status: 'done', GeneratedVideos: [{ VideoUrl: 'https://cdn.test/wan.mp4' }] };
+    await context.writeJson(context.resultPath, context.buildResultData('success', id, item, item, '', '', null, action));
+    await fs.rm(context.runningPath, { force: true });
+  }, async baseUrl => {
+    for (const model of ['Wan-3.0', 'wan-3.0', 'ali-wan3.0-video']) {
+      for (const resolution of ['480p', '720p', '1080p']) {
+        const response = await postAsk(baseUrl, { model, prompt: 'clouds', duration: 10, resolution, wait_for_completion: true });
+        assert.equal(response.status, 'completed');
+        assert.equal(response.result.video_url, 'https://cdn.test/wan.mp4');
+        assert.equal(observed.at(-1).action, 'generate_video');
+        assert.equal(observed.at(-1).request.model, model);
+        assert.equal(observed.at(-1).request.resolution, resolution);
+      }
+    }
+  });
+});
+
+test('Canvas video API accepts Flash names and code', async () => {
+  const observed = [];
+  await withServer(async (id, requestPath, _body, action, context) => {
+    observed.push({ action, request: await readJson(requestPath) });
+    const item = { Status: 'done', GeneratedVideos: [{ VideoUrl: 'https://cdn.test/flash.mp4' }] };
+    await context.writeJson(context.resultPath, context.buildResultData('success', id, item, item, '', '', null, action));
+    await fs.rm(context.runningPath, { force: true });
+  }, async baseUrl => {
+    for (const model of ['doubao-seedance-2.5-flash', 'Doubao-Seedance-2.5-Flash', 'Seedance-2.5-Flash', 'ep-20261112160431-rl4w7']) {
+      const response = await postAsk(baseUrl, { model, prompt: 'clouds', duration: 30, resolution: '720p', wait_for_completion: true });
+      assert.equal(response.status, 'completed');
+      assert.equal(response.result.video_url, 'https://cdn.test/flash.mp4');
+      assert.equal(observed.at(-1).action, 'generate_video');
+      assert.equal(observed.at(-1).request.model, model);
+    }
   });
 });
 
@@ -1758,22 +1836,30 @@ test('image task app default runner routes progress and terminal states to its i
 });
 
 test('image task app creates a session whose ready pages attach to its injected panel', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task-server-session-panel-test-'));
   const pages = [];
   let sessionOptions;
   const panel = { attachPage: (page) => pages.push(page) };
+  try {
+    const app = createTaskApp({
+      runningDir: path.join(root, 'running'),
+      resultsDir: path.join(root, 'results'),
+      requestsDir: path.join(root, 'requests'),
+      imageTaskStatusPanel: panel,
+      imageSessionOptions: {
+        createSession: (options) => { sessionOptions = options; return { runTask: async () => ({ status: 'failed' }) }; },
+        sessionOptions: { log: () => {} },
+      },
+    });
 
-  const app = createTaskApp({
-    imageTaskStatusPanel: panel,
-    imageSessionOptions: {
-      createSession: (options) => { sessionOptions = options; return { runTask: async () => ({ status: 'failed' }) }; },
-      sessionOptions: { log: () => {} },
-    },
-  });
-
-  assert.equal(app.locals.imageTaskStatusPanel, panel);
-  assert.equal(typeof sessionOptions?.onSessionReady, 'function');
-  sessionOptions.onSessionReady('injected-page');
-  assert.deepEqual(pages, ['injected-page']);
+    await app.locals.ready;
+    assert.equal(app.locals.imageTaskStatusPanel, panel);
+    assert.equal(typeof sessionOptions?.onSessionReady, 'function');
+    sessionOptions.onSessionReady('injected-page');
+    assert.deepEqual(pages, ['injected-page']);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test('image task session exceptions are reported exactly once across runner and observer', async () => {

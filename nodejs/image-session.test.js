@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { createImageSession, IMAGE_ASPECT_RATIOS, normalizeImageRatio } from './image-session.js';
+import { createImageSession, dailyProjectName, IMAGE_ASPECT_RATIOS, normalizeImageRatio } from './image-session.js';
 
 function deferred() {
   let resolve;
@@ -107,6 +107,9 @@ function createHarness(options = {}) {
       evaluate: async (_fn, args) => {
         if (!args?.requestPath) return { width: 1200, height: 900 };
         calls.push({ path: args.requestPath, body: args.body, timeoutMs: args.timeoutMs, page });
+        if (args.requestPath === '/proxy/api/v1/project/list') {
+          return options.listProjects ? options.listProjects(args.body) : { Result: { Items: [] } };
+        }
         return handler(args.requestPath, args.body, { calls, page, statuses });
       },
     };
@@ -165,6 +168,7 @@ async function withSession(harness, callback, options = {}) {
     timers: { now: Date.now, sleep: async () => {} },
     // Existing session tests focus on upload/poll behavior; style discovery has dedicated coverage below.
     visualPromptId: 'realistic_modern_urban',
+    getProjectName: () => '2026-11-16',
     ...options,
   });
   try {
@@ -173,6 +177,43 @@ async function withSession(harness, callback, options = {}) {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 }
+
+test('daily project names use the Shanghai calendar date without suffixes', () => {
+  assert.equal(dailyProjectName(new Date('2026-11-15T16:00:00Z')), '2026-11-16');
+  assert.equal(dailyProjectName(new Date('2026-11-15T15:59:59Z')), '2026-11-15');
+});
+
+test('readiness reuses the current team daily project found on a later page, including after restart', async () => {
+  const harness = createHarness({
+    listProjects: async (body) => {
+      assert.equal(body.TeamId, 'team-current');
+      if (body.PageIndex === 1) return { Result: { Total: 2, Items: [{ ProjectId: 'old', ProjectName: '2026-11-15' }] } };
+      return { Result: { Total: 2, Items: [{ ProjectName: '2026-11-16', ProjectId: 'daily', ScriptId: 'daily-script', TeamId: 'team-current' }] } };
+    },
+  });
+  for (let restart = 0; restart < 2; restart += 1) {
+    await withSession(harness, async (session) => {
+      const states = await Promise.all([session.ensureReady(), session.ensureReady()]);
+      assert.equal(states[0], states[1]);
+      assert.equal(states[0].projectId, 'daily');
+      assert.equal(states[0].projectName, '2026-11-16');
+      assert.equal(states[0].url, 'https://work.xiaomaomi.cn/dramart/project/daily/daily-script/team-current/canvas');
+    }, { visualPromptId: 'a-different-style' });
+  }
+  assert.equal(harness.calls.some(call => call.path === '/proxy/api/v1/project/create'), false);
+  assert.equal(harness.calls.some(call => call.path === '/proxy/api/v1/project/update'), false);
+});
+
+test('unreadable daily project listings fail without creating a duplicate', async () => {
+  for (const listing of [{ Result: {} }, { Code: 500, Result: { Items: [] } },
+    { Result: { Items: [{ ProjectName: '2026-11-16', ProjectId: 'missing-script' }] } }]) {
+    const harness = createHarness({ listProjects: async () => listing });
+    await withSession(harness, async session => {
+      await assert.rejects(session.ensureReady(), /项目/);
+      assert.equal(harness.calls.some(call => call.path === '/proxy/api/v1/project/create'), false);
+    });
+  }
+});
 
 test('image ratio normalization accepts only the Canvas-supported ratios', () => {
   const supported = ['1:1', '3:2', '2:3', '3:4', '4:3', '4:5', '5:4', '16:9', '9:16', '21:9'];
@@ -191,6 +232,25 @@ test('image submissions send auto AspectRatio for unsupported input without chan
     assert.ok(submissions.every((call) => call.body.ModelConf.AspectRatio === 'auto'));
     assert.ok(submissions.every((call) => !('AspectRatio' in call.body.GenerationParams[0])));
     assert.ok(submissions.every((call) => !('Resolution' in call.body.GenerationParams[0])));
+  });
+});
+
+test('Pro converts auto to square while 5.5 retains auto and explicit ratios stay unchanged', async () => {
+  const harness = createHarness();
+  await withSession(harness, async session => {
+    const cases = [
+      ['doubao-seedream-5.0-pro', 'auto', '1:1'],
+      ['ep-20260709194802-qsvc2', 'auto', '1:1'],
+      ['doubao-seedream-5.0-pro', 'smart', '1:1'],
+      ['doubao-seedream-5.0-pro', '16:9', '16:9'],
+      ['doubao-seedream-5.5', 'auto', 'auto'],
+      ['doubao-seedream-5.5', '9:16', '9:16'],
+    ];
+    for (const [index, [model, ratio]] of cases.entries()) {
+      await session.runTask(`model-ratio-${index}`, task({ model, ratio, model_name: undefined }));
+    }
+    const submissions = harness.calls.filter(call => call.path === '/proxy/api/v1/tasks/image/generate');
+    assert.deepEqual(submissions.map(call => call.body.ModelConf.AspectRatio), cases.map(([, , expected]) => expected));
   });
 });
 
@@ -225,7 +285,7 @@ test('concurrent readiness creates one fixed 9:16 image project and keeps its ca
     initGate.resolve();
     const [a, b] = await Promise.all([first, second]);
     assert.equal(a, b);
-    assert.equal(a.projectName, 'image');
+    assert.equal(a.projectName, '2026-11-16');
     assert.equal(a.url, 'https://work.xiaomaomi.cn/dramart/project/project-1/script-1/team-current/canvas');
     assert.equal(harness.pages[0].isClosed(), false);
     assert.deepEqual(harness.pages[0].viewports, [{ width: 1920, height: 920 }]);
@@ -234,7 +294,7 @@ test('concurrent readiness creates one fixed 9:16 image project and keeps its ca
     assert.equal(create.body.AspectRatio, '9:16');
     assert.equal(create.body.VisualPromptId, 'realistic_modern_urban');
     const updates = harness.calls.filter((call) => call.path === '/proxy/api/v1/project/update');
-    assert.equal(updates[0].body.ProjectName, 'image');
+    assert.equal(updates[0].body.ProjectName, '2026-11-16');
     assert.equal(updates[1].body.Status, 'resource_confirmed');
   });
 });
@@ -263,7 +323,7 @@ test('tasks submit concurrently with independent requested ratios', async () => 
 
   await withSession(harness, async (session) => {
     const first = session.runTask('task-a', task({ ratio: '1:1' }));
-    await waitUntil(() => harness.calls.some((call) => call.path.endsWith('/list')), 'first task did not start polling');
+    await waitUntil(() => harness.calls.some((call) => call.path === '/proxy/api/v1/tasks/image/list'), 'first task did not start polling');
     const second = session.runTask('task-b', task({ ratio: '16:9' }));
     await waitUntil(() => harness.calls.filter((call) => call.path.endsWith('/generate')).length >= 2, 'second task did not submit');
 
@@ -281,6 +341,17 @@ test('tasks submit concurrently with independent requested ratios', async () => 
   });
 });
 
+test('Seedream 5.5 defaults to 1.5k, upgrades 1k and preserves 1.5k and 2k', async () => {
+  const harness = createHarness();
+  await withSession(harness, async session => {
+    for (const resolution of [undefined, '1k', '1.5k', '2k']) {
+      await session.runTask(`seedream-55-${resolution || 'default'}`, task({ model: 'doubao-seedream-5.5', model_name: undefined, resolution }));
+    }
+    const configs = harness.calls.filter(call => call.path === '/proxy/api/v1/tasks/image/generate').map(call => call.body.ModelConf);
+    assert.deepEqual(configs, ['1.5k', '1.5k', '1.5k', '2k'].map(Resolution => ({ Code: 'ep-20261112220042-6vzbt', Name: 'Seedream-5.5', Resolution, AspectRatio: '1:1' })));
+  });
+});
+
 test('custom session style configures its project and is the generation default, while a task override wins', async () => {
   const harness = createHarness();
   await withSession(harness, async (session) => {
@@ -292,7 +363,7 @@ test('custom session style configures its project and is the generation default,
     const create = harness.calls.find((call) => call.path === '/proxy/api/v1/project/create');
     assert.equal(create.body.VisualPromptId, 'account-custom-style');
     const rename = harness.calls.find((call) => call.path === '/proxy/api/v1/project/update' && call.body.ProjectName);
-    assert.match(rename.body.ProjectName, /^image-style-account-custom-style-/);
+    assert.equal(rename.body.ProjectName, '2026-11-16');
     const submissions = harness.calls.filter((call) => call.path === '/proxy/api/v1/tasks/image/generate');
     assert.deepEqual(submissions.map((call) => call.body.ParsedPrompt.StyleId).sort(), ['account-custom-style', 'one-off-style']);
   }, { visualPromptId: 'account-custom-style' });
@@ -348,7 +419,7 @@ test('concurrent polling stays isolated by each generated resourceId', async () 
       session.runTask('task-b', task({ ratio: '4:3' })),
     ]);
     const listIds = harness.calls
-      .filter((call) => call.path.endsWith('/list'))
+      .filter((call) => call.path === '/proxy/api/v1/tasks/image/list')
       .map((call) => call.body.Filters.ResourceIds[0]);
     assert.deepEqual(new Set(listIds), new Set(['resource-1', 'resource-2']));
     assert.deepEqual(new Set(results.map((result) => result.resourceId)), new Set(['resource-1', 'resource-2']));
@@ -670,7 +741,7 @@ test('page closure after submission recovers and polls the old target without re
     assert.equal(result.images[0].image_url, 'https://cdn.test/recovered.png');
     assert.equal(submitCount, 1);
     assert.equal(replacement.calls.filter((call) => call.path === '/proxy/api/v1/project/create').length, 1);
-    const recoveredPoll = replacement.calls.find((call) => call.path.endsWith('/list'));
+    const recoveredPoll = replacement.calls.find((call) => call.path === '/proxy/api/v1/tasks/image/list');
     assert.equal(recoveredPoll.body.TeamId, 'team-current');
     assert.equal(recoveredPoll.body.ProjectId, 'old-project');
     assert.equal(recoveredPoll.body.ScriptId, 'old-script');

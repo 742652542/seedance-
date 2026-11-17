@@ -4,14 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js",
     "start:node-task": "node nodejs/task-server.js",
-    "test:server": "node --test server.test.js",
-    "test": "node --test nodejs/chrome-runtime.test.js nodejs/dramart-team.test.js nodejs/dramart-style.test.js nodejs/image-task-status-panel.test.js nodejs/video-preparation-scheduler.test.js nodejs/video-child-runner.test.js nodejs/video-temp-images.test.js nodejs/prepare-video-workflow.test.js nodejs/image-session.test.js nodejs/canvas-video-session.test.js nodejs/live-image-concurrency-test.test.js nodejs/task-server.test.js"
+    "test": "node --test nodejs/canvas-video-session.test.js nodejs/chrome-runtime.test.js nodejs/dramart-style.test.js nodejs/dramart-team.test.js nodejs/image-session.test.js nodejs/image-task-status-panel.test.js nodejs/prepare-video-workflow.test.js nodejs/task-server.test.js nodejs/video-child-runner.test.js nodejs/video-preparation-scheduler.test.js nodejs/video-temp-images.test.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "open": "^10.1.0",
     "puppeteer-core": "^21.11.0"
   },
   "engines": {

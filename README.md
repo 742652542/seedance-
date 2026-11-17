@@ -1,157 +1,84 @@
-# Seedance 视频生成任务
+# Seedance 自动化任务服务
 
-本地 Node 程序，用于接入火山方舟视频生成任务接口：创建任务、查询单个任务、查询任务列表。
+项目只保留 `npm run start:node-task` 对应的 Dramart 自动化任务服务，支持生图、Canvas 视频和项目/分镜视频任务。
 
-## 安装 Node.js 环境
+## 安装与启动
 
-项目要求 Node.js 20 或更高版本，推荐使用 Node.js 20。
+需要 Node.js 20 或更高版本，以及本机安装的 Google Chrome。
 
-### 方法一：使用仓库内置的 Windows 便携版
-
-仓库的 `vendor/node-v20.20.2-win-x64.zip` 适用于 64 位 Windows，无需安装：
-
-1. 解压 `vendor/node-v20.20.2-win-x64.zip`。
-2. 将解压后的目录加入系统 `Path`，或者直接在该目录中运行 `node.exe` 和 `npm.cmd`。
-3. 重新打开命令提示符并检查版本：
-
-```cmd
-node -v
-npm -v
-```
-
-`node -v` 应输出 `v20.20.2`。如果不想修改系统 `Path`，可在项目根目录中直接执行：
-
-```cmd
-vendor\node-v20.20.2-win-x64\npm.cmd ci
-vendor\node-v20.20.2-win-x64\npm.cmd run start:node-task
-```
-
-注意：需要先将 ZIP 解压到 `vendor\node-v20.20.2-win-x64\`，不能直接从压缩包中运行。
-
-### 方法二：从 Node.js 官网安装
-
-从 [Node.js 官网](https://nodejs.org/) 下载并安装 Node.js 20 的 Windows x64 版本。安装完成后重新打开命令提示符并检查：
-
-```cmd
-node -v
-npm -v
-```
-
-## 安装项目依赖
-
-进入项目根目录后执行：
-
-```cmd
+```sh
 npm ci
-```
-
-`npm ci` 会根据 `package-lock.json` 安装项目锁定的依赖版本，主要包括：
-
-- `express`：提供 HTTP API 服务。
-- `open`：自动打开本地网页。
-- `puppeteer-core`：连接并控制已有的 Chromium 浏览器。
-
-如果删除了 `package-lock.json`，才使用：
-
-```cmd
-npm install
-```
-
-安装完成后会生成 `node_modules/`。该目录已被 Git 忽略，不需要提交到仓库。
-
-## 启动
-
-### 启动火山方舟网页服务
-
-```bash
-npm start
-```
-
-启动后会自动打开：
-
-```text
-http://localhost:3000
-```
-
-### 启动 Dramart 自动化任务服务
-
-```cmd
 npm run start:node-task
 ```
 
-默认服务地址：
+默认监听 `0.0.0.0:9091`，本机访问 `http://127.0.0.1:9091`。`GET /health` 用于检查服务状态。
 
-```text
-http://127.0.0.1:9091
-```
+服务自动查找并启动 Google Chrome，登录状态保存在 `.chrome-user-data/`。Chrome 运行满 24 小时后，服务会等待任务空闲再重启浏览器。
 
-Dramart 自动化服务会自动查找并启动当前电脑安装的 Google Chrome，不再依赖 `127.0.0.1:27997` 浏览器管理服务。Chrome 用户缓存保存在项目根目录的 `.chrome-user-data/` 中，该目录不会提交到 Git。
+Chrome 查找顺序：
 
-默认按以下顺序查找 Chrome：
-
-1. 环境变量 `CHROME_PATH` 指定的位置。
+1. 环境变量 `CHROME_PATH`。
 2. `C:\Program Files\Google\Chrome\Application\chrome.exe`。
 3. `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`。
-4. 当前用户的 `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`。
+4. `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`。
 
-如果 Chrome 安装在其他位置，可以先设置：
+## 账号配置
 
-```cmd
-set CHROME_PATH=D:\你的目录\chrome.exe
-npm run start:node-task
-```
-
-Chrome 连续运行满 24 小时后，服务会等待所有图片和视频任务结束，在任务空闲时自动重启 Chrome。Dramart 账号和接口说明参见 `docs/task-api.md`。
-
-## 支持模型
-
-```text
-doubao-seedance-2-5-260628
-doubao-seedance-2-0-260128
-doubao-seedance-2-0-fast-260128
-doubao-seedance-2-0-mini-260615
-```
-
-## 图片输入
-
-页面支持直接上传多张参考图片。创建任务时会在浏览器本地压缩并转成 Base64，然后作为 `content[].image_url.url` 传给火山方舟接口。
-
-默认图片角色是 `reference_image`，也可以在页面切换为 `first_frame` 或 `last_frame`。
-
-## API Key 配置
-
-可以直接在页面填写并保存到浏览器本地存储。
-
-也可以复制 `api-keys.example.json` 为 `api-keys.json`，按模型填写不同 Key：
+可以设置 `DRAMART_USERNAME`、`DRAMART_PASSWORD` 环境变量，或在项目根目录创建 `dramart-auth.json`：
 
 ```json
 {
-  "doubao-seedance-2-5-260628": "你的 API Key",
-  "doubao-seedance-2-0-260128": "你的 API Key",
-  "doubao-seedance-2-0-fast-260128": "你的 API Key",
-  "doubao-seedance-2-0-mini-260615": "你的 API Key"
+  "username": "你的账号",
+  "password": "你的密码"
 }
 ```
 
-`api-keys.json` 已加入 `.gitignore`，不会被提交。
+环境变量优先于配置文件。账号配置、浏览器缓存和任务数据均不提交到 Git。
 
-## 环境变量
+## API
 
-可选：
+完整请求参数、模型和返回格式见 [任务 API 文档](docs/task-api.md)。
 
-```text
-PORT=3000
-NO_OPEN=1
-ARK_API_KEY=通用 API Key
-DRAMART_VISUAL_PROMPT_ID=当前 Dramart 账号可用的风格 ID
-MEDIA_TRANSFER_CONCURRENCY=同时下载或上传的参考素材数，默认 2
-MEDIA_TRANSFER_TIMEOUT_MS=单个参考素材下载或上传阶段的总超时，默认 900000
-```
+| 接口 | 用途 |
+| --- | --- |
+| `POST /api/ask` | 提交任务 |
+| `GET /api/result/{task_id}` | 查询任务结果 |
+| `GET /api/files/{task_id}` | 获取生成的媒体地址 |
+| `GET /health` | 健康检查 |
 
-`DRAMART_VISUAL_PROMPT_ID` 同时用于新建视频项目和共享生图项目，且优先级最高：设置后会直接使用该 ID，不读取风格库。未设置时，服务会在当前已登录团队中分页读取可见的 `custom` 风格：恰好一个则自动使用；没有则记录日志并兼容回退到 `realistic_modern_urban`；多个则在创建项目前失败，并列出候选名称/ID，要求你显式设置此变量。接口或返回结构异常也会安全失败，不会猜测风格。切换 Dramart 账号后，不要复用其他账号的 ID。请求中的 `style_id`/`styleId` 可对单次任务覆盖服务自动风格；自定义风格的项目名称会带稳定的风格标识，避免与旧默认风格项目混用。
+任务类型：
 
-也支持按模型配置环境变量，例如：
+- `generate_image`：常驻 Canvas 会话生图。
+- `generate_video`：Canvas 视频流程。
+- `generate_video_project`：项目/分镜视频流程，通过独立子进程执行。
 
-```text
-ARK_API_KEY_DOUBAO_SEEDANCE_2_5_260628=你的 API Key
+## 常用环境变量
+
+| 变量 | 默认值或用途 |
+| --- | --- |
+| `HOST` | `0.0.0.0` |
+| `PORT` | `9091` |
+| `CHROME_PATH` | 自定义 Chrome 可执行文件路径 |
+| `BROWSER_URL` | 连接已有 Chrome 调试地址 |
+| `TEAM_ID` | 指定团队；未设置时自动解析 |
+| `SEEDANCE_DEBUG` | 默认开启，设为 `0` 关闭 |
+| `DRAMART_VISUAL_PROMPT_ID` | 指定当前账号可用的风格 ID |
+| `GENERATION_TIMEOUT_MS` | 图片及项目视频生成超时，默认 `900000` |
+| `VIDEO_GENERATION_TIMEOUT_MS` | Canvas 视频生成超时，默认 `1800000` |
+| `POLL_INTERVAL_MS` | 生成结果轮询间隔，默认 `3000` |
+| `MEDIA_TRANSFER_CONCURRENCY` | Canvas 素材传输并发数，默认 `2` |
+| `MEDIA_TRANSFER_TIMEOUT_MS` | 单个素材下载或上传阶段超时，默认 `900000` |
+| `VIDEO_PREPARATION_TIMEOUT_MS` | 项目视频准备阶段超时，默认 `300000` |
+
+未设置 `DRAMART_VISUAL_PROMPT_ID` 时，服务读取当前团队可见的自定义风格：只有一个时自动使用，没有时回退到 `realistic_modern_urban`，多个时要求显式指定。请求中的 `style_id` / `styleId` 可以覆盖单次任务的风格。
+
+## 目录与测试
+
+- `nodejs/task-server.js`：唯一服务入口，负责认证、任务 API 和任务恢复。
+- `nodejs/`：该入口依赖的浏览器、图片、视频、调度和临时素材模块，以及对应回归测试。
+- `docs/task-api.md`：接口文档。
+- `seedance_tasks/`：运行时生成的请求、运行状态和结果。
+
+```sh
+npm test
 ```

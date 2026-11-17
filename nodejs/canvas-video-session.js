@@ -8,6 +8,13 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_TEMP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'tmp-canvas-video');
 
 const VIDEO_MODEL_MAP = {
+  'Wan-3.0': 'ali-wan3.0-video',
+  'wan-3.0': 'ali-wan3.0-video',
+  'ali-wan3.0-video': 'ali-wan3.0-video',
+  'Doubao-Seedance-2.5-Flash': 'ep-20261112160431-rl4w7',
+  'doubao-seedance-2.5-flash': 'ep-20261112160431-rl4w7',
+  'Seedance-2.5-Flash': 'ep-20261112160431-rl4w7',
+  'ep-20261112160431-rl4w7': 'ep-20261112160431-rl4w7',
   'Doubao-Seedance-2.5': 'ep-20260729173114-qjxc2',
   'ep-20260729173114-qjxc2': 'ep-20260729173114-qjxc2',
   'Doubao-Seedance-2-0': 'ep-20260322113401-vj4bf',
