@@ -17,6 +17,7 @@
 | 健康成功，任务一直处理中 | 先在 `requests`、`running`、`results` 按任务 ID 查找。合法但未知的任务 ID 也会返回 `processing`。检查是否打到同一工作副本，以及是否为重启遗留生图。 |
 | 启动 Chrome 或连接失败 | 看 `[chrome.open]`、`[browser.ready]`、`[image-session.ready_error]`。检查 Chrome 路径、当前用户对档案的权限、浏览器窗口和调试端点。 |
 | 日志反复 `[auth.waiting]` | 核对 Chrome 中登录状态、账号配置 JSON、团队和 Dramart 项目列表访问。没有完整凭据时，在该 Chrome 窗口手动登录。 |
+| 待命页掉线后共享 Canvas 未重开 | 核对项目列表是否跳到登录页，以及账号配置是否可用于自动登录。检查 `[auth.logout_check_failed]`、`[auth.logout_recovered]` 和 `[auth.canvas_reopen_failed]`。在测试团队验收时，可退出登录，确认待命页重新登录且共享 Canvas 重开。 |
 | 风格初始化失败 | 检查当前团队可用风格和日志中的候选项。共享 Canvas 的歧义用 `DRAMART_VISUAL_PROMPT_ID` 处理，再按需传任务级风格。 |
 | 本地记录成功，客户端打不开媒体 | 对照 `result.data`、`video_url`、`image_url` 或 `result.cdn_url`。用调用方所在网络检查该地址的访问权限和有效性。服务保存的是上游链接。 |
 | 素材下载、注册或上传失败 | 核对运行机对素材的访问权限、URL 有效性、媒体大小及上游业务错误。项目视频还要看分镜的上传保存确认。 |

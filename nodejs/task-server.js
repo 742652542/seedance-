@@ -30,6 +30,7 @@ const CONFIGURED_TEAM_ID = process.env.TEAM_ID || '';
 const PROJECTLIST_URL = 'https://work.xiaomaomi.cn/dramart/projectlist/';
 const LOGIN_URL = 'https://work.xiaomaomi.cn/dramart/login';
 const LOGIN_POLL_INTERVAL_MS = Number(process.env.LOGIN_POLL_INTERVAL_MS || 2000);
+const LOGOUT_CHECK_INTERVAL_MS = 180_000;
 const AUTH_CONFIG_PATH = path.resolve(__dirname, '..', 'dramart-auth.json');
 const MODELS = new Set([
   'Doubao-Seedance-2.5',
@@ -232,7 +233,7 @@ export function createAuthenticationGate(options) {
   async function waitForAuthentication() {
     while (true) {
       try {
-        if (await options.verify()) return;
+        if (await options.verify()) return true;
       } catch (error) {
         options.log?.(`[auth.check_failed] error=${String(error)}`);
       }
@@ -248,14 +249,34 @@ export function createAuthenticationGate(options) {
     }
   }
 
+  function start(check) {
+    waiting = check().finally(() => {
+      waiting = null;
+    });
+    return waiting;
+  }
+
+  function ensure() {
+    if (!waiting) return start(waitForAuthentication);
+    return waiting.then((authenticated) => authenticated || ensure());
+  }
+
   return {
-    ensure() {
-      if (!waiting) {
-        waiting = waitForAuthentication().finally(() => {
-          waiting = null;
-        });
-      }
-      return waiting;
+    ensure,
+    checkForLogout(onRecovered) {
+      if (waiting) return Promise.resolve();
+      return start(async () => {
+        try {
+          if (!await options.isLoggedOut()) return false;
+        } catch (error) {
+          options.log?.(`[auth.logout_check_failed] error=${String(error)}`);
+          return false;
+        }
+        await waitForAuthentication();
+        return true;
+      }).then((recovered) => {
+        if (recovered) return onRecovered();
+      });
     },
   };
 }
@@ -398,6 +419,12 @@ async function loginStandbyBrowser() {
 
 const authenticationGate = createAuthenticationGate({
   verify: async () => authenticationState((await ensureStandbyBrowser()).page),
+  isLoggedOut: async () => {
+    const { page } = await ensureStandbyBrowser();
+    await page.goto(PROJECTLIST_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 }).catch(() => {});
+    return new URL(page.url()).pathname.replace(/\/$/, '') === new URL(LOGIN_URL).pathname;
+  },
   login: loginStandbyBrowser,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   pollIntervalMs: LOGIN_POLL_INTERVAL_MS,
@@ -1485,17 +1512,39 @@ export function listenTaskApp(taskApp, options = {}) {
   return taskApp.listen(options.port ?? PORT, options.host || HOST, options.onListening);
 }
 
+function startLogoutMonitor(server) {
+  let checking = false;
+  const timer = setInterval(async () => {
+    if (checking) return;
+    checking = true;
+    try {
+      await authenticationGate.checkForLogout(async () => {
+        debugLog('[auth.logout_recovered] reopening shared Canvas');
+        await imageSession.reopen();
+      });
+    } catch (error) {
+      debugLog(`[auth.canvas_reopen_failed] error=${String(error)}`);
+    } finally {
+      checking = false;
+    }
+  }, LOGOUT_CHECK_INTERVAL_MS);
+  timer.unref();
+  server.once('close', () => clearInterval(timer));
+}
+
 export async function startTaskServer(options = {}) {
 const taskApp = options.taskApp || createTaskApp({ acquireBrowserLease: () => chromeRuntime.acquire() });
 await taskApp.locals.ready;
 const listen = options.listen || listenTaskApp;
-return listen(taskApp, { port: PORT, host: HOST, onListening: () => {
+const server = listen(taskApp, { port: PORT, host: HOST, onListening: () => {
   console.log(`Seedance Node task server: http://${HOST}:${PORT}`);
   debugLog(`[server] debug=${DEBUG} task_root=${TASK_ROOT}`);
   imageSession.ensureReady().catch((error) => {
     debugLog(`[image-session.ready_error] error=${String(error)}`);
   });
 } });
+server.once?.('listening', () => startLogoutMonitor(server));
+return server;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

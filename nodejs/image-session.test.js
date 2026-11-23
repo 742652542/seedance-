@@ -623,6 +623,34 @@ test('page replacement removes the old DOM listener and activates only the new p
   });
 });
 
+test('reopening closes the old Canvas before sharing one replacement in the same project', async () => {
+  const project = { ProjectName: '2026-11-23', ProjectId: 'project-existing', ScriptId: 'script-existing', TeamId: 'team-current' };
+  const harness = createHarness({ listProjects: () => ({ Result: { Items: [project] } }) });
+  await withSession(harness, async (session) => {
+    const oldState = await session.ensureReady();
+    const closeGate = deferred();
+    const close = oldState.page.close;
+    oldState.page.close = async () => {
+      await closeGate.promise;
+      await close();
+    };
+
+    const reopen = session.reopen();
+    assert.equal(session.ensureReady(), reopen);
+    assert.equal(session.reopen(), reopen);
+    assert.equal(harness.pages.length, 1);
+    closeGate.resolve();
+
+    const newState = await reopen;
+    assert.equal(oldState.page.isClosed(), true);
+    assert.notEqual(newState.page, oldState.page);
+    assert.equal(newState.url, oldState.url);
+    assert.equal(newState.projectId, 'project-existing');
+    assert.equal(harness.pages.length, 2);
+    assert.equal(harness.calls.some((call) => call.path === '/proxy/api/v1/project/create'), false);
+  }, { getProjectName: () => project.ProjectName });
+});
+
 test('invalidated initialization cannot clear or resolve instead of a concurrent retry', async () => {
   const first = createHarness();
   const replacementCreateGate = deferred();

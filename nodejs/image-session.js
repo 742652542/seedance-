@@ -241,7 +241,7 @@ export function createImageSession(options = {}) {
     if (invalidated) {
       invalidated.browser.off?.('disconnected', invalidated.onDisconnected);
       invalidated.page.off?.('domcontentloaded', invalidated.onPageReady);
-      if (!invalidated.page.isClosed()) invalidated.page.close().catch(() => {});
+      if (!invalidated.page.isClosed()) return invalidated.page.close().catch(() => {});
     }
   }
 
@@ -309,7 +309,7 @@ export function createImageSession(options = {}) {
     }
   }
 
-  function ensureReady() {
+  function ensureReady(afterClose) {
     if (state && isConnected(state.browser) && !state.page.isClosed()) {
       const knownTeamId = getKnownTeamId?.();
       if (!knownTeamId || knownTeamId === state.teamId) return Promise.resolve(state);
@@ -319,7 +319,7 @@ export function createImageSession(options = {}) {
     if (state) invalidate(state.generation);
     if (!initializationPromise) {
       let ownedPromise;
-      ownedPromise = initialize().then(
+      ownedPromise = (afterClose ? afterClose.then(initialize) : initialize()).then(
         (initialized) => {
           if (initializationPromise === ownedPromise) initializationPromise = null;
           return initialized;
@@ -332,6 +332,11 @@ export function createImageSession(options = {}) {
       initializationPromise = ownedPromise;
     }
     return initializationPromise;
+  }
+
+  function reopen() {
+    if (initializationPromise) return initializationPromise;
+    return ensureReady(invalidate());
   }
 
   async function materializeImage(value, index, taskDir) {
@@ -522,5 +527,5 @@ export function createImageSession(options = {}) {
     }
   }
 
-  return { ensureReady, runTask };
+  return { ensureReady, reopen, runTask };
 }

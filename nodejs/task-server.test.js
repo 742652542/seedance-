@@ -2214,6 +2214,52 @@ test('authentication gate shares one login recovery across concurrent callers', 
   assert.equal(loginCalls, 1);
 });
 
+test('periodic logout check leaves a healthy Canvas alone and shares detected login recovery', async () => {
+  const detected = deferred();
+  let authenticated = false;
+  let loggedOut = false;
+  let loginCalls = 0;
+  let reopenCalls = 0;
+  const gate = createAuthenticationGate({
+    isLoggedOut: async () => loggedOut && detected.promise,
+    verify: async () => authenticated,
+    login: async () => { loginCalls += 1; authenticated = true; },
+    sleep: async () => {},
+    pollIntervalMs: 0,
+  });
+  const reopen = () => {
+    assert.equal(authenticated, true);
+    reopenCalls += 1;
+  };
+
+  await gate.checkForLogout(reopen);
+  assert.equal(loginCalls, 0);
+  assert.equal(reopenCalls, 0);
+
+  loggedOut = true;
+  const periodic = gate.checkForLogout(reopen);
+  const task = gate.ensure();
+  await gate.checkForLogout(reopen);
+  detected.resolve(true);
+  await Promise.all([periodic, task]);
+  assert.equal(loginCalls, 1);
+  assert.equal(reopenCalls, 1);
+});
+
+test('a failed logout probe does not reopen Canvas or bypass task authentication', async () => {
+  let verifies = 0;
+  const gate = createAuthenticationGate({
+    isLoggedOut: async () => { throw new Error('navigation failed'); },
+    verify: async () => { verifies += 1; return true; },
+    login: () => assert.fail('unexpected login'),
+  });
+  await Promise.all([
+    gate.checkForLogout(() => assert.fail('unexpected Canvas reopen')),
+    gate.ensure(),
+  ]);
+  assert.equal(verifies, 1);
+});
+
 test('image and video tasks wait for authentication before dispatch', async () => {
   const authentication = deferred();
   const starts = [];
