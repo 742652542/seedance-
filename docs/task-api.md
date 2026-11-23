@@ -2,6 +2,8 @@
 
 本文档描述 `nodejs/task-server.js` 提供的生图与视频创作接口。
 
+首次接入可按 [媒体生成索引](media-generation/index.md) 选择流程。服务还提供 `GET /health`，用于确认 HTTP 响应。它返回 `success`、`service`、`port` 和 `ark_base_url`，其中历史服务名保留为 `seedance-python-task-server`。登录和真实生成需要单独验收，见 [HTTP 路由清单](development/http-route-reference.md) 与 [运行检查清单](operations/operations-checklist.md)。
+
 生图和视频共用同一套任务协议：
 
 ```text
@@ -76,7 +78,7 @@ POST /api/ask
 Content-Type: application/json
 ```
 
-默认采用异步模式，接口创建本地任务后立即返回 `task_id`，浏览器自动化流程在后台继续执行。
+默认采用异步模式，接口创建本地任务后立即返回 `task_id`，浏览器自动化流程在后台继续执行。JSON 请求体上限为 200 MB。如果提供非空的 `content` 数组，则使用其中的 `text`、`image_url`、`video_url` 项作为任务输入，优先于简写字段。
 
 生图任务由服务进程内的常驻会话执行。服务初始化时使用上海时区的当天日期（`YYYY-MM-DD`）作为项目名称，不附加风格或其他后缀；分页查找当前团队的同名项目，存在则复用，不存在才新建 manual 项目，以固定项目比例 `9:16` 完成资源确认并长期保留其 Canvas 页面。项目比例只是创建项目所需参数；每个生图请求仍按自身 `ratio` 提交。并发生图请求共享项目和认证页面，但分别上传参考图、创建生成资源并按各自的 `resourceId` 独立轮询，不经过本地串行队列。单个任务失败不会关闭共享页面或中止其他任务；页面关闭或浏览器断连后，后续请求共享一次会话重建。
 
@@ -88,7 +90,7 @@ Content-Type: application/json
 
 只有在有效 `TASK_STARTED` 上下文持久化前无法确认子进程退出，才会阻塞视频 preparation queue；持久化成功后该任务已经离开共享准备区，后续失败或退出状态不明不会追溯阻塞下一项。
 
-只有 `generate_video_project` 使用动态 `queue_position`。`generate_video` 与生图一样直接返回 `queue_position: 0`，该字段只是兼容字段。服务重启时，处理中任务不会自动重复提交。
+只有 `generate_video_project` 使用动态 `queue_position`。`generate_video` 与生图一样直接返回 `queue_position: 0`，该字段只是兼容字段。服务重启时，排队的项目视频可以恢复，已经处于处理中的两种视频会写入中断结果，遗留生图记录不会自动重跑，详见 [启动恢复规则](operations/runtime-and-data.md#服务重启如何处理未完成任务)。
 
 ### 3.2 视频请求示例
 
@@ -123,24 +125,25 @@ Content-Type: application/json
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |---|---|---:|---|---|
 | `action` | string | 建议 | 自动判断 | 新 Canvas 流程固定传 `generate_video`；旧项目流程传 `generate_video_project` |
-| `model` | string | 否 | Canvas：`Doubao-Seedance-2-0`；旧项目：`Doubao-Seedance-2.0-fast` | Seedance 页面模型名称或下表对应的实际 Code |
+| `model` | string | 否 | Canvas：`Doubao-Seedance-2-0`；旧项目：`Doubao-Seedance-2.0-fast` | Canvas 支持下表的名称或 Code，旧项目只接受下文列出的页面名称 |
 | `prompt` | string | 是 | 无 | 视频提示词，不能为空 |
 | `images` | array/string | 否 | `[]` | 一张或多张参考图片 |
 | `image` | object/string | 否 | 无 | 单张图片，是 `images` 的简写 |
-| `videos` | array/string | 否 | `[]` | 一段或多段参考视频；仅 `reference_frame` 可用 |
+| `videos` | array/object/string | 否 | `[]` | 一段或多段参考视频，仅 Canvas 的 `reference_frame` 可用 |
 | `video` | object/string | 否 | 无 | 单段视频，是 `videos` 的简写 |
-| `gen_type` | string | 否 | `reference_frame` | `reference_frame`（全能参考）或 `head_tail_frame`（首尾帧） |
+| `gen_type` / `genType` | string | 否 | `reference_frame` | Canvas 的 `reference_frame`（全能参考）或 `head_tail_frame`（首尾帧）。旧项目按图片角色选择模式 |
 | `image_type` | string | 否 | `reference_image` | 字符串图片使用的默认角色 |
 | `resolution` | string | 否 | `720p` | 视频清晰度，支持 `480p`、`720p`、`1080p`、`4k`；大小写输入会规范化为小写 |
 | `ratio` | string | 否 | `16:9` | 视频比例 |
 | `duration` | integer | 否 | `5` | 视频时长，必须是正整数 |
+| `count` / `n` | number | 否 | `1` | Canvas 视频提交的生成数量，最小为 1 |
 | `output_format` | string | 否 | `mp4` | 输出格式 |
 | `seed` | integer | 否 | `-1` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `framespersecond` | integer | 否 | `24` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `generate_audio` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `watermark` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
 | `camera_fixed` | boolean | 否 | `false` | 会写入任务载荷，当前网页工作流未实际使用 |
-| `style_id` | string | 否 | 当前团队自动识别的唯一自定义风格 | 本次视频项目使用的 Dramart 风格 ID，优先于服务自动识别；会使用独立项目名避免复用其他风格 |
+| `style_id` | string | 否 | 见[风格选择规则](operations/runtime-and-data.md#登录团队与风格) | Canvas 作为当次生成风格；旧项目使用该风格匹配或创建项目 |
 | `styleId` | string | 否 | 无 | `style_id` 的别名 |
 | `wait_for_completion` | boolean | 否 | `false` | 是否让 `/api/ask` 等待任务执行完毕 |
 | `advancedJson` | string | 否 | 无 | JSON 字符串，解析后覆盖同名字段 |
@@ -157,7 +160,7 @@ Content-Type: application/json
 | `Doubao-Seedance-2.0-fast` | `ep-20260320142658-hscwv` |
 | `Doubao-Seedance-2.0-mini` | `doubao-seedance-2-0-mini-260615` |
 
-这些值来自当前登录浏览器的实际模型能力配置。
+这些是当前源码中的 Canvas 模型映射。项目分镜视频只接受 `Doubao-Seedance-2.5`、`Doubao-Seedance-2-0`、`Doubao-Seedance-2.0-fast`、`Doubao-Seedance-2.0-mini` 四个名称。账号实际可用模型和参数以 Dramart 为准。
 
 Wan-3.0 用于 Canvas 视频流程（`action: generate_video`），`model` 可传 `Wan-3.0`、`wan-3.0` 或实际 Code `ali-wan3.0-video`。支持全能参考与首尾帧两种现有生成模式，页面提供 `480p`、`720p`、`1080p`。例如：
 
@@ -212,7 +215,7 @@ first_frame
 last_frame
 ```
 
-以下角色仅用于 `generate_video_project`。使用 `first_frame` 或 `last_frame` 时，旧项目视频工作流会采用图生视频模式。
+这些角色用于 `generate_video_project` 的分镜流程。使用 `first_frame` 或 `last_frame` 时会采用图生视频模式。Canvas 首尾帧使用 `gen_type` 和图片顺序。
 
 图片可以使用字符串：
 
@@ -282,7 +285,7 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 | `model_name` | string | 建议 | 根据 `model` 推导；未传模型时为 `Doubao-Seedream-5.0-Pro` | 图片模型显示名称 |
 | `modelName` | string | 否 | 无 | `model_name` 的别名 |
 | `prompt` | string | 是 | 无 | 生图提示词，不能为空 |
-| `images` | array/string | 是 | 无 | 至少一张参考图片 |
+| `images` | array/object/string | 是 | 无 | 至少一张参考图片 |
 | `image` | object/string | 否 | 无 | 单张参考图片简写 |
 | `ratio` | string | 否 | `16:9` | 图片生成比例；支持 `1:1`、`3:2`、`2:3`、`3:4`、`4:3`、`4:5`、`5:4`、`16:9`、`9:16`、`21:9`，其他值按页面“智能”（`auto`）提交 |
 | `aspect_ratio` | string | 否 | 无 | `ratio` 的别名 |
@@ -296,7 +299,7 @@ Data URL 和 Base64 字符串使用标准 Base64 alphabet，padding 只能位于
 
 生图任务必须包含至少一张参考图片。当前实现不支持纯文本无参考图生图。上述 `ratio: 16:9` 和 `resolution: 720p` 是 `task-server` 对请求的默认标准化值；共享 `image` 项目创建时仍使用固定项目比例 `9:16`，该项目级参数不会覆盖请求的图片生成比例。创建会话会在已登录且解析到 TeamId 后读取当前团队可见 `custom` 风格：一个则自动采用，零个才回退到 `realistic_modern_urban`，多个或接口异常会在创建项目前失败。`DRAMART_VISUAL_PROMPT_ID` 非空时始终跳过读取并强制采用；单个请求显式提供 `style_id` 时只覆盖该次生成的 `ParsedPrompt.StyleId`，不会重建共享会话。
 
-切换账号后，只有在该团队有多个可见自定义风格、且需要固定选择其中一个时，才配置该账号实际提供的 `DRAMART_VISUAL_PROMPT_ID` 并重启服务。若风格库显示自定义风格数量为 0，服务会安全回退，不能复用旧账号的风格 ID。
+切换账号或团队时，核对已有的 `DRAMART_VISUAL_PROMPT_ID`，将其换成新团队可用的 ID，或清除该配置并按团队自动解析。配置变化在重启后生效。
 
 ### 3.8 支持的生图模型
 
@@ -375,7 +378,7 @@ doubao-seedream-4-5
 }
 ```
 
-调用方必须保存顶层 `task_id`。上例表示视频任务提交时前面已有一项占用 preparation 调度槽；`queue_position` 并非固定值。`0` 表示当前任务已占用该槽，可能正在等待认证或执行项目确认、专属 episode/shot 创建；正数表示等待该槽。生图响应当前也包含兼容字段 `queue_position: 0`，但生图不使用该视频 preparation queue，调用方不应据此推断生图调度状态。
+调用方必须保存顶层 `task_id`。上例是项目分镜视频排在第一个等待位置。`0` 表示该任务已占用准备槽，可能正在等待认证或执行项目确认、专属集和分镜创建。正数表示等待位置。生图和 Canvas 视频在受理时返回固定的兼容值 `queue_position: 0`。
 
 ### 4.2 请求校验失败
 
@@ -413,9 +416,9 @@ doubao-seedream-4-5
 
 `POST /api/ask` 会等待浏览器自动化任务结束，然后返回与 `/api/result/{task_id}` 相同的完成结构。
 
-同步请求的总耗时没有固定上限，包含 FIFO 队列等待、认证等待、视频准备以及生成结果轮询。`VIDEO_PREPARATION_TIMEOUT_MS` 的单位是毫秒，默认值为 `300000`；任务占用 preparation 调度槽后会先等待认证和 standby browser 准备，子进程启动后该超时约束等待有效 `TASK_STARTED` 的阶段。超时会终止视频子进程、形成失败结果并放行下一项。认证等待和队列等待本身没有固定超时上限。
+同步请求的总耗时没有固定上限，包含认证、会话或素材准备和生成结果轮询。项目分镜视频还会等待准备队列。任务占用准备槽后先等待认证和浏览器准备，子进程启动后由 `VIDEO_PREPARATION_TIMEOUT_MS`（默认 `300000` 毫秒）约束等待有效 `TASK_STARTED` 的阶段。超时会尝试终止子进程。准备上下文尚未持久化且退出无法确认时，准备队列进入阻塞。
 
-`GENERATION_TIMEOUT_MS` 默认约 15 分钟，同时约束生图和视频各自提交后的生成结果轮询，不包含队列等待、认证等待或视频 preparation，也不是同步请求总超时。经过反向代理、网关或负载均衡器调用时，建议使用默认异步模式，避免 HTTP 请求超时。
+`GENERATION_TIMEOUT_MS` 默认 15 分钟，约束生图与项目分镜视频的生成轮询。`VIDEO_GENERATION_TIMEOUT_MS` 默认 30 分钟，约束 Canvas 视频生成轮询。队列、认证、准备、上传的耗时需另计。经过反向代理、网关或负载均衡器调用时，建议使用默认异步模式。
 
 ## 5. 查询结果
 
@@ -429,7 +432,7 @@ GET /api/result/{task_id}
 
 ### 5.2 处理中
 
-视频任务仍在 preparation queue 中时，顶层兼容状态保持为 `processing`，实际排队状态及动态位置如下：
+项目分镜视频仍在等待或执行准备时，顶层兼容状态保持为 `processing`，实际排队状态及动态位置如下：
 
 ```json
 {
@@ -446,7 +449,7 @@ GET /api/result/{task_id}
 
 `queue_position: 0` 表示任务已占用视频 preparation 调度槽，可能正在等待认证或执行项目确认、专属 episode/shot 创建；正数表示等待该槽的位置，并会随着前序任务放行而变化。有效 `TASK_STARTED` 上下文持久化后，任务释放该槽并进入 `processing`，响应不再包含 `queue_position`。
 
-视频任务收到 `TASK_STARTED` 并转为 `processing` 后，或生图任务处于处理中时，响应不提供队列位置：
+项目分镜视频收到 `TASK_STARTED` 并转为 `processing` 后，以及生图、Canvas 视频处于处理中时，查询响应不提供队列位置：
 
 ```json
 {
@@ -460,7 +463,7 @@ GET /api/result/{task_id}
 }
 ```
 
-自动化进入项目后，`completion_response` 可能包含项目、剧集和调试上下文。视频进入 `processing` 只表示 preparation 已完成；上传、参数填写、提交及结果轮询仍可能在独立页面中继续。
+项目分镜视频的 `completion_response` 可能包含项目、集和调试上下文。该流程进入 `processing` 表示串行准备已完成，上传、参数填写、提交和轮询仍可能在独立页面继续。
 
 ### 5.3 任务不存在
 
@@ -472,9 +475,11 @@ GET /api/result/{task_id}
 }
 ```
 
-当前实现不会对不存在的任务返回 HTTP 404，因此客户端无法严格区分“任务尚未落盘”和“任务 ID 不存在”。调用方应设置自己的最大轮询次数或总超时时间。
+合法 ID 在结果和运行目录都查不到时返回上述结构。ID 需匹配 `^dramart-\d{14}-[a-z0-9]{5}$`，格式不合法会返回 `status: "error"`。调用方应使用受理返回的任务 ID，并设置最大轮询次数或总超时时间。
 
 ### 5.4 视频成功
+
+以下为 Canvas 视频的简化响应。项目分镜视频的 `action` 为 `generate_video_project`，有准备上下文时，`debug_task_id` 由项目名和集序号组成。
 
 ```json
 {
@@ -482,13 +487,13 @@ GET /api/result/{task_id}
   "result": {
     "status": "success",
     "task_id": "dramart-20260909153000-abc12",
-    "debug_task_id": "2026-09-09-16:9-1",
-    "project_name": "2026-09-09-16:9",
-    "episode_index": 1,
+    "debug_task_id": "dramart-20260909153000-abc12",
+    "project_name": "2026-09-09",
+    "episode_index": null,
     "action": "generate_video",
     "data": {
-      "status": "succeeded",
-      "debug_task_id": "2026-09-09-16:9-1",
+      "Status": "done",
+      "debug_task_id": "dramart-20260909153000-abc12",
       "content": {
         "video_url": "https://cdn.example.com/video.mp4"
       }
@@ -643,6 +648,8 @@ GET /api/files/{task_id}
 
 ### 6.4 任务失败
 
+已存在终态记录，但任务失败或没有可提取的媒体地址时，此接口返回 `failed`。
+
 ```json
 {
   "status": "failed",
@@ -671,7 +678,7 @@ GET /api/files/{task_id}
 
 ## 8. cURL 示例
 
-以下命令适用于 Windows `cmd.exe`。
+以下命令适用于 Windows `cmd.exe`。提交前将 `https://example.com/product.jpg` 换成服务可访问的素材，查询时换成受理返回的任务 ID。
 
 ### 8.1 提交视频任务
 
@@ -703,6 +710,8 @@ curl "http://127.0.0.1:9091/api/files/dramart-20260909153000-abc12"
 
 ## 9. JavaScript 调用示例
 
+示例使用 Node.js 20 或更新版本。运行前替换示例素材 URL，按业务允许的时间设置轮询截止点。
+
 ```js
 const baseUrl = 'http://127.0.0.1:9091';
 
@@ -732,8 +741,12 @@ if (accepted.status !== 'processing') {
 }
 
 const taskId = accepted.task_id;
+const deadline = Date.now() + 35 * 60 * 1000;
 
 while (true) {
+  if (Date.now() >= deadline) {
+    throw new Error(`达到客户端轮询时限，任务 ID：${taskId}`);
+  }
   await new Promise((resolve) => setTimeout(resolve, 3000));
 
   const resultResponse = await fetch(`${baseUrl}/api/result/${encodeURIComponent(taskId)}`);
@@ -755,12 +768,6 @@ while (true) {
 
 ## 10. 相关实现
 
-- 服务入口：`nodejs/task-server.js`
-- 任务类型判断：`nodejs/task-server.js` 中的 `taskAction`
-- 请求标准化：`nodejs/task-server.js` 中的 `bodyToPayload`
-- Canvas 视频会话：`nodejs/canvas-video-session.js`
-- 旧项目视频自动化：`nodejs/prepare-video-workflow.js`
-- 常驻生图会话：`nodejs/image-session.js`
-- 本地任务请求：`seedance_tasks/requests/`
-- 运行中任务：`seedance_tasks/running/`
-- 已完成任务：`seedance_tasks/results/`
+- [服务入口和请求处理](../nodejs/task-server.js) — `taskAction` 选择任务类型，`bodyToPayload` 规范化请求。
+- [Canvas 视频会话](../nodejs/canvas-video-session.js)、[项目分镜视频脚本](../nodejs/prepare-video-workflow.js)和[常驻生图会话](../nodejs/image-session.js) — 对应三条生成路径。
+- [本地任务数据](operations/runtime-and-data.md#数据日志与清理) — 请求、运行中记录、结果和临时素材。

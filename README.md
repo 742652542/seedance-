@@ -1,6 +1,6 @@
 # Seedance 自动化任务服务
 
-项目只保留 `npm run start:node-task` 对应的 Dramart 自动化任务服务，支持生图、Canvas 视频和项目/分镜视频任务。
+通过 `npm run start:node-task` 启动 Dramart 自动化任务服务，支持生图、Canvas 视频和项目/分镜视频任务。开发、运维和业务文档从 [项目文档索引](AGENTS.md#文档索引) 进入。
 
 ## 安装与启动
 
@@ -11,7 +11,7 @@ npm ci
 npm run start:node-task
 ```
 
-默认监听 `0.0.0.0:9091`，本机访问 `http://127.0.0.1:9091`。`GET /health` 用于检查服务状态。
+默认监听 `0.0.0.0:9091`，本机访问 `http://127.0.0.1:9091`。`GET /health` 检查 HTTP 服务是否响应。需要本机使用时，启动前设置 `HOST=127.0.0.1`。Chrome 和 Dramart 的验收步骤见 [运行检查清单](docs/operations/operations-checklist.md)。
 
 服务自动查找并启动 Google Chrome，登录状态保存在 `.chrome-user-data/`。Chrome 运行满 24 小时后，服务会等待任务空闲再重启浏览器。
 
@@ -33,7 +33,7 @@ Chrome 查找顺序：
 }
 ```
 
-环境变量优先于配置文件。账号配置、浏览器缓存和任务数据均不提交到 Git。
+每个字段的非空环境变量优先于配置文件。缺少账号或密码时，可在弹出的 Chrome 登录页面手动登录。账号配置、浏览器缓存和任务数据均不提交到 Git。
 
 ## API
 
@@ -70,7 +70,7 @@ Chrome 查找顺序：
 | `MEDIA_TRANSFER_TIMEOUT_MS` | 单个素材下载或上传阶段超时，默认 `900000` |
 | `VIDEO_PREPARATION_TIMEOUT_MS` | 项目视频准备阶段超时，默认 `300000` |
 
-未设置 `DRAMART_VISUAL_PROMPT_ID` 时，服务读取当前团队可见的自定义风格：只有一个时自动使用，没有时回退到 `realistic_modern_urban`，多个时要求显式指定。请求中的 `style_id` / `styleId` 可以覆盖单次任务的风格。
+未设置 `DRAMART_VISUAL_PROMPT_ID` 时，共享 Canvas 初始化会读取当前团队可见的自定义风格：只有一个时自动使用，没有时回退到 `realistic_modern_urban`，多个时要求显式指定。请求中的 `style_id` / `styleId` 可以覆盖单次生成使用的风格。完整配置和各流程的风格选择规则见 [运行依赖与任务数据](docs/operations/runtime-and-data.md)。
 
 ## 目录与测试
 
